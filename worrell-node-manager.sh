@@ -382,7 +382,7 @@ s%:9090%:${CUSTOM_PORT}090%g" $WORRELL_HOME/config/app.toml
 s%:26657%:${CUSTOM_PORT}657%g;
 s%:6060%:${CUSTOM_PORT}060%g;
 s%:26656%:${CUSTOM_PORT}656%g;
-s%^external_address = \"\"%external_address = \"$(curl -s ifconfig.me):${CUSTOM_PORT}656\"%;
+s%^external_address = \"\"%external_address = \"$(curl -4 -s ifconfig.me || wget -4 -qO- ifconfig.me):${CUSTOM_PORT}656\"%;
 s%:26660%:${CUSTOM_PORT}660%g" $WORRELL_HOME/config/config.toml
 
     # Pruning ayarları
