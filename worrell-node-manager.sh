@@ -19,10 +19,11 @@ CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
-# Chain sabitleri
-CHAIN_ID="worrell-testnet-1"
-DENOM="uworrell"
-DAEMON_NAME="worrelld"
+# Chain sabitleri (Tamamı izole ve sabittir)
+readonly CHAIN_ID="worrell-testnet-1"
+readonly DENOM="uworrell"
+readonly DAEMON_NAME="worrelld"
+readonly WORRELL_HOME="$HOME/.worrell"
 WORRELL_REPO="worrellchain/worrell"
 WORRELL_VERSION="v0.1.2"
 NETWORKS_RAW="https://raw.githubusercontent.com/worrellchain/networks/main/worrell-testnet-1"
@@ -31,6 +32,17 @@ PERSISTENT_PEER="bb9164c1bd9ed9ff2c0fd9e09b23285698e231de@164.68.98.186:26656"
 MIN_GAS_PRICE="0.025uworrell"
 FAUCET_URL="http://164.68.98.186:4500"
 REQUIRED_GO_VERSION="1.23.5"
+
+# Mevcut portu oku veya varsayılan 10 ata
+get_node_rpc() {
+    local port="10"
+    if [ -f "$HOME/.bash_profile" ]; then
+        local saved_port
+        saved_port=$(grep 'WORRELL_PORT=' "$HOME/.bash_profile" | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        [ -n "$saved_port" ] && port="$saved_port"
+    fi
+    echo "tcp://127.0.0.1:${port}657"
+}
 
 # ASCII Art
 print_logo() {
@@ -180,7 +192,9 @@ export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
 EOF
     fi
 
-    source $HOME/.profile
+    export GOROOT=/usr/local/go
+    export GOPATH=$HOME/go
+    export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
     echo -e "${GREEN}Go $(go version) kuruldu.${NC}"
 }
 
@@ -192,14 +206,14 @@ install_dependencies() {
     echo -e "${GREEN}Bağımlılıklar yüklendi.${NC}"
 }
 
-# Cosmovisor kur (chain-agnostic; sunucuda başka node'lar için kurulu olabilir)
+# Cosmovisor kur
 install_cosmovisor() {
     echo -e "${BLUE}Cosmovisor kuruluyor...${NC}"
     go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@latest
     echo -e "${GREEN}Cosmovisor: $($HOME/go/bin/cosmovisor version 2>&1 | tail -n1)${NC}"
 }
 
-# worrelld release binary'sini indir (GitHub API ile linux/arch eşleşmesi otomatik bulunur)
+# worrelld release binary'sini indir
 download_worrelld() {
     local arch_raw
     arch_raw="$(uname -m)"
@@ -243,7 +257,6 @@ download_worrelld() {
     tar -xzf worrelld.tar.gz 2>/dev/null || cp worrelld.tar.gz worrelld
     rm -f worrelld.tar.gz
 
-    # libwasmvm varsa sistem kütüphanesine taşı
     if find "$WORK_DIR" -name "libwasmvm*.so" 2>/dev/null | grep -q .; then
         find "$WORK_DIR" -name "libwasmvm*.so" -exec sudo mv {} /usr/lib/ \;
         echo -e "${GREEN}libwasmvm kütüphanesi kuruldu.${NC}"
@@ -269,7 +282,7 @@ download_worrelld() {
         sudo ln -sf $HOME/go/bin/worrelld /usr/local/bin/worrelld
     fi
 
-    echo -e "${GREEN}worrelld versiyonu: $($HOME/go/bin/worrelld version 2>/dev/null || echo 'versiyon okunamadı')${NC}"
+    echo -e "${GREEN}worrelld versiyonu: $($HOME/go/bin/worrelld version --home $WORRELL_HOME 2>/dev/null || echo 'versiyon okunamadı')${NC}"
     return 0
 }
 
@@ -286,7 +299,6 @@ install_node() {
         return
     fi
 
-    # Port seçimi
     echo
     read -p "$(echo -e ${YELLOW}$(get_text enter_port)" [varsayılan: 10]: "${NC})" CUSTOM_PORT
 
@@ -318,28 +330,25 @@ install_node() {
 
     install_cosmovisor
 
-    # Cosmovisor dizin yapısını oluştur
     echo -e "${BLUE}Cosmovisor dizin yapısı oluşturuluyor...${NC}"
-    mkdir -p $HOME/.worrell/cosmovisor/genesis/bin
-    mkdir -p $HOME/.worrell/cosmovisor/upgrades
-    cp $HOME/go/bin/worrelld $HOME/.worrell/cosmovisor/genesis/bin/worrelld
+    mkdir -p $WORRELL_HOME/cosmovisor/genesis/bin
+    mkdir -p $WORRELL_HOME/cosmovisor/upgrades
+    cp $HOME/go/bin/worrelld $WORRELL_HOME/cosmovisor/genesis/bin/worrelld
 
-    if [ ! -f "$HOME/.worrell/cosmovisor/genesis/bin/worrelld" ]; then
+    if [ ! -f "$WORRELL_HOME/cosmovisor/genesis/bin/worrelld" ]; then
         echo -e "${RED}HATA: Cosmovisor genesis binary kopyalanamadı!${NC}"
         sleep 3
         return
     fi
-    echo -e "${GREEN}Cosmovisor genesis binary doğrulandı: $(ls -lh $HOME/.worrell/cosmovisor/genesis/bin/worrelld)${NC}"
+    echo -e "${GREEN}Cosmovisor genesis binary doğrulandı: $(ls -lh $WORRELL_HOME/cosmovisor/genesis/bin/worrelld)${NC}"
 
-    # Node initialize
     echo -e "${BLUE}Node başlatılıyor...${NC}"
-    $HOME/go/bin/worrelld init "$MONIKER" --chain-id="$CHAIN_ID"
+    $HOME/go/bin/worrelld init "$MONIKER" --chain-id="$CHAIN_ID" --home="$WORRELL_HOME"
 
-    # Genesis indir ve doğrula
     echo -e "${BLUE}Genesis indiriliyor...${NC}"
-    curl -fsSL "${NETWORKS_RAW}/genesis.json" -o $HOME/.worrell/config/genesis.json
+    curl -fsSL "${NETWORKS_RAW}/genesis.json" -o $WORRELL_HOME/config/genesis.json
 
-    DOWNLOADED_SHA=$(sha256sum $HOME/.worrell/config/genesis.json | awk '{print $1}')
+    DOWNLOADED_SHA=$(sha256sum $WORRELL_HOME/config/genesis.json | awk '{print $1}')
     if [ "$DOWNLOADED_SHA" != "$GENESIS_SHA256" ]; then
         echo -e "${RED}HATA: Genesis SHA256 uyuşmuyor!${NC}"
         echo -e "${RED}Beklenen: $GENESIS_SHA256${NC}"
@@ -349,48 +358,40 @@ install_node() {
     fi
     echo -e "${GREEN}Genesis checksum doğrulandı.${NC}"
 
-    # Environment değişkenlerini ayarla
-    export WALLET="wallet"
-    export WORRELL_PORT="$CUSTOM_PORT"
-
+    # Bash profiline diğer zincirleri etkilemeyecek şekilde WORRELL prefixiyle yaz
     sed -i '/WORRELL_PORT/d' $HOME/.bash_profile 2>/dev/null
     sed -i '/WORRELL_MONIKER/d' $HOME/.bash_profile 2>/dev/null
-    sed -i '/WORRELL_WALLET/d' $HOME/.bash_profile 2>/dev/null
     sed -i '/WORRELL_CHAIN_ID/d' $HOME/.bash_profile 2>/dev/null
 
     cat <<EOF >> $HOME/.bash_profile
-export WORRELL_WALLET="wallet"
 export WORRELL_MONIKER="$MONIKER"
 export WORRELL_CHAIN_ID="$CHAIN_ID"
 export WORRELL_PORT="$CUSTOM_PORT"
 EOF
-    source $HOME/.bash_profile
 
-    # Peer / gas price ayarları
     echo -e "${BLUE}Konfigürasyonlar ayarlanıyor...${NC}"
-    sed -i "s|^persistent_peers *=.*|persistent_peers = \"${PERSISTENT_PEER}\"|" $HOME/.worrell/config/config.toml
-    sed -i 's|minimum-gas-prices =.*|minimum-gas-prices = "'"${MIN_GAS_PRICE}"'"|g' $HOME/.worrell/config/app.toml
-    sed -i -e "s/^enable *=.*/enable = true/" $HOME/.worrell/config/app.toml
+    sed -i "s|^persistent_peers *=.*|persistent_peers = \"${PERSISTENT_PEER}\"|" $WORRELL_HOME/config/config.toml
+    sed -i 's|minimum-gas-prices =.*|minimum-gas-prices = "'"${MIN_GAS_PRICE}"'"|g' $WORRELL_HOME/config/app.toml
+    sed -i -e "s/^enable *=.*/enable = true/" $WORRELL_HOME/config/app.toml
 
-    # Port ayarları
-    sed -i.bak -e "s%:1317%:${WORRELL_PORT}317%g;
-s%:9090%:${WORRELL_PORT}090%g" $HOME/.worrell/config/app.toml
+    # Port yapılandırması
+    sed -i.bak -e "s%:1317%:${CUSTOM_PORT}317%g;
+s%:9090%:${CUSTOM_PORT}090%g" $WORRELL_HOME/config/app.toml
 
-    sed -i.bak -e "s%:26658%:${WORRELL_PORT}658%g;
-s%:26657%:${WORRELL_PORT}657%g;
-s%:6060%:${WORRELL_PORT}060%g;
-s%:26656%:${WORRELL_PORT}656%g;
-s%^external_address = \"\"%external_address = \"$(wget -qO- eth0.me):${WORRELL_PORT}656\"%;
-s%:26660%:${WORRELL_PORT}660%g" $HOME/.worrell/config/config.toml
+    sed -i.bak -e "s%:26658%:${CUSTOM_PORT}658%g;
+s%:26657%:${CUSTOM_PORT}657%g;
+s%:6060%:${CUSTOM_PORT}060%g;
+s%:26656%:${CUSTOM_PORT}656%g;
+s%^external_address = \"\"%external_address = \"$(curl -s ifconfig.me):${CUSTOM_PORT}656\"%;
+s%:26660%:${CUSTOM_PORT}660%g" $WORRELL_HOME/config/config.toml
 
     # Pruning ayarları
-    sed -i -e "s/^pruning *=.*/pruning = \"custom\"/" $HOME/.worrell/config/app.toml
-    sed -i -e "s/^pruning-keep-recent *=.*/pruning-keep-recent = \"100\"/" $HOME/.worrell/config/app.toml
-    sed -i -e "s/^pruning-interval *=.*/pruning-interval = \"19\"/" $HOME/.worrell/config/app.toml
-    sed -i -e "s/prometheus = false/prometheus = true/" $HOME/.worrell/config/config.toml
-    sed -i -e "s/^indexer *=.*/indexer = \"null\"/" $HOME/.worrell/config/config.toml
+    sed -i -e "s/^pruning *=.*/pruning = \"custom\"/" $WORRELL_HOME/config/app.toml
+    sed -i -e "s/^pruning-keep-recent *=.*/pruning-keep-recent = \"100\"/" $WORRELL_HOME/config/app.toml
+    sed -i -e "s/^pruning-interval *=.*/pruning-interval = \"19\"/" $WORRELL_HOME/config/app.toml
+    sed -i -e "s/prometheus = false/prometheus = true/" $WORRELL_HOME/config/config.toml
+    sed -i -e "s/^indexer *=.*/indexer = \"null\"/" $WORRELL_HOME/config/config.toml
 
-    # Cosmovisor servisi oluştur
     echo -e "${BLUE}Cosmovisor servisi oluşturuluyor...${NC}"
     sudo tee /etc/systemd/system/worrelld.service > /dev/null <<EOF
 [Unit]
@@ -399,12 +400,12 @@ After=network-online.target
 
 [Service]
 User=$USER
-ExecStart=$HOME/go/bin/cosmovisor run start
+ExecStart=$HOME/go/bin/cosmovisor run start --home $WORRELL_HOME
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
 Environment="DAEMON_NAME=worrelld"
-Environment="DAEMON_HOME=$HOME/.worrell"
+Environment="DAEMON_HOME=$WORRELL_HOME"
 Environment="DAEMON_ALLOW_DOWNLOAD_BINARIES=false"
 Environment="DAEMON_RESTART_AFTER_UPGRADE=true"
 Environment="UNSAFE_SKIP_BACKUP=true"
@@ -416,7 +417,6 @@ EOF
     sudo systemctl daemon-reload
     sudo systemctl enable worrelld
 
-    # Servisi başlat
     echo -e "${BLUE}Node başlatılıyor...${NC}"
     sudo systemctl restart worrelld
 
@@ -439,7 +439,7 @@ EOF
     echo -e "${CYAN}Yararlı Komutlar:${NC}"
     echo -e "${YELLOW}Servis Durumu: ${WHITE}sudo systemctl status worrelld${NC}"
     echo -e "${YELLOW}Logları Görüntüle: ${WHITE}sudo journalctl -u worrelld -f${NC}"
-    echo -e "${YELLOW}Sync Durumu: ${WHITE}worrelld status 2>&1 | jq .SyncInfo${NC}"
+    echo -e "${YELLOW}Sync Durumu: ${WHITE}worrelld status --home $WORRELL_HOME --node $(get_node_rpc) 2>&1 | jq .SyncInfo${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
 
     read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
@@ -449,9 +449,9 @@ EOF
 check_sync_status() {
     clear
     print_logo
-    echo -e "${BLUE}Sync Durumu:${NC}"
+    echo -e "${BLUE}Sync Durumu ($CHAIN_ID):${NC}"
     echo
-    worrelld status 2>&1 | jq .SyncInfo
+    $HOME/go/bin/worrelld status --home "$WORRELL_HOME" --node "$(get_node_rpc)" 2>&1 | jq .SyncInfo
     echo
     echo -e "${YELLOW}Catching Up: false ise sync tamamlanmıştır${NC}"
     read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
@@ -478,7 +478,7 @@ create_wallet() {
         return
     fi
 
-    worrelld keys add $WALLET_NAME
+    $HOME/go/bin/worrelld keys add "$WALLET_NAME" --home "$WORRELL_HOME"
     echo
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo -e "${GREEN}Cüzdan oluşturuldu!${NC}"
@@ -500,7 +500,7 @@ import_wallet() {
         return
     fi
 
-    worrelld keys add $WALLET_NAME --recover
+    $HOME/go/bin/worrelld keys add "$WALLET_NAME" --recover --home "$WORRELL_HOME"
     echo
     echo -e "${GREEN}Cüzdan içe aktarıldı!${NC}"
     read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
@@ -518,7 +518,7 @@ request_faucet() {
         return
     fi
 
-    ADDRESS=$(worrelld keys show $WALLET_NAME -a 2>/dev/null)
+    ADDRESS=$($HOME/go/bin/worrelld keys show "$WALLET_NAME" -a --home "$WORRELL_HOME" 2>/dev/null)
     if [ -z "$ADDRESS" ]; then
         echo -e "${RED}Adres bulunamadı! Cüzdan ismini kontrol edin.${NC}"
         sleep 2
@@ -539,7 +539,7 @@ create_validator() {
     clear
     print_logo
 
-    echo -e "${YELLOW}Validator Detayları:${NC}"
+    echo -e "${YELLOW}Validator Detayları ($CHAIN_ID):${NC}"
     echo
     read -p "Cüzdan ismi: " WALLET_NAME
     read -p "Validator ismi (moniker): " MONIKER
@@ -553,23 +553,25 @@ create_validator() {
     read -p "Minimum self delegation (örn: 1): " MIN_SELF_DELEGATION
     read -p "Stake miktarı (örn: 1000000${DENOM}): " AMOUNT
 
-    worrelld tx staking create-validator \
-        --amount=$AMOUNT \
-        --pubkey=$(worrelld tendermint show-validator) \
+    $HOME/go/bin/worrelld tx staking create-validator \
+        --amount="$AMOUNT" \
+        --pubkey="$($HOME/go/bin/worrelld tendermint show-validator --home "$WORRELL_HOME")" \
         --moniker="$MONIKER" \
         --identity="$IDENTITY" \
         --website="$WEBSITE" \
         --security-contact="$SECURITY" \
         --details="$DETAILS" \
-        --chain-id=$CHAIN_ID \
+        --chain-id="$CHAIN_ID" \
         --commission-rate="$RATE" \
         --commission-max-rate="$MAX_RATE" \
         --commission-max-change-rate="$MAX_CHANGE_RATE" \
         --min-self-delegation="$MIN_SELF_DELEGATION" \
-        --from=$WALLET_NAME \
-        --gas=auto \
-        --gas-adjustment=1.4 \
-        --fees=500${DENOM} \
+        --from="$WALLET_NAME" \
+        --home="$WORRELL_HOME" \
+        --node="$(get_node_rpc)" \
+        --gas="auto" \
+        --gas-adjustment="1.4" \
+        --fees="500${DENOM}" \
         -y
 
     echo
@@ -587,12 +589,14 @@ delegate_tokens() {
     read -p "Validator adresi: " VALIDATOR_ADDR
     read -p "Miktar (örn: 1000000${DENOM}): " AMOUNT
 
-    worrelld tx staking delegate $VALIDATOR_ADDR $AMOUNT \
-        --from=$WALLET_NAME \
-        --chain-id=$CHAIN_ID \
-        --gas=auto \
-        --gas-adjustment=1.4 \
-        --fees=500${DENOM} \
+    $HOME/go/bin/worrelld tx staking delegate "$VALIDATOR_ADDR" "$AMOUNT" \
+        --from="$WALLET_NAME" \
+        --chain-id="$CHAIN_ID" \
+        --home="$WORRELL_HOME" \
+        --node="$(get_node_rpc)" \
+        --gas="auto" \
+        --gas-adjustment="1.4" \
+        --fees="500${DENOM}" \
         -y
 
     echo
@@ -609,11 +613,13 @@ send_tokens() {
     read -p "Alıcı adres: " TO_ADDRESS
     read -p "Miktar (örn: 1000000${DENOM}): " AMOUNT
 
-    worrelld tx bank send $WALLET_NAME $TO_ADDRESS $AMOUNT \
-        --chain-id=$CHAIN_ID \
-        --gas=auto \
-        --gas-adjustment=1.4 \
-        --fees=500${DENOM} \
+    $HOME/go/bin/worrelld tx bank send "$WALLET_NAME" "$TO_ADDRESS" "$AMOUNT" \
+        --chain-id="$CHAIN_ID" \
+        --home="$WORRELL_HOME" \
+        --node="$(get_node_rpc)" \
+        --gas="auto" \
+        --gas-adjustment="1.4" \
+        --fees="500${DENOM}" \
         -y
 
     echo
@@ -626,10 +632,21 @@ check_balance() {
     clear
     print_logo
 
-    read -p "Cüzdan ismi veya adres: " WALLET
+    read -p "Cüzdan ismi veya adres: " WALLET_INPUT
 
-    echo -e "${BLUE}Bakiye sorgulanıyor...${NC}"
-    worrelld query bank balances $WALLET
+    echo -e "${BLUE}Bakiye sorgulanıyor ($CHAIN_ID)...${NC}"
+    local TARGET_ADDR
+    if [[ "$WALLET_INPUT" =~ ^worrell ]]; then
+        TARGET_ADDR="$WALLET_INPUT"
+    else
+        TARGET_ADDR=$($HOME/go/bin/worrelld keys show "$WALLET_INPUT" -a --home "$WORRELL_HOME" 2>/dev/null)
+    fi
+
+    if [ -z "$TARGET_ADDR" ]; then
+        echo -e "${RED}Adres tespit edilemedi!${NC}"
+    else
+        $HOME/go/bin/worrelld query bank balances "$TARGET_ADDR" --chain-id="$CHAIN_ID" --home="$WORRELL_HOME" --node="$(get_node_rpc)"
+    fi
 
     echo
     read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
@@ -692,10 +709,10 @@ node_management_menu() {
                     sudo systemctl disable worrelld
                     sudo rm -f /etc/systemd/system/worrelld.service
                     sudo systemctl daemon-reload
-                    rm -rf $HOME/.worrell
+                    rm -rf "$WORRELL_HOME"
                     rm -f $HOME/go/bin/worrelld
                     sudo rm -f /usr/local/bin/worrelld
-                    sed -i '/WORRELL_/d' $HOME/.bash_profile
+                    sed -i '/WORRELL_/d' $HOME/.bash_profile 2>/dev/null
                     echo -e "${GREEN}Node tamamen silindi!${NC}"
                     echo -e "${YELLOW}Not: Go ve Cosmovisor kurulumu (sunucudaki diğer node'lar için) korundu.${NC}"
                     sleep 3
