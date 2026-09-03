@@ -131,6 +131,49 @@ curl -X POST http://164.68.98.186:4500 \
   -d '{"address":"worrell1..."}'
 ```
 
+```
+# Değişkenleri kendi bilgilerinize göre düzenleyin
+MONIKER="YOUR_MONIKER"
+IDENTITY="YOUR_KEYBASE_ID"
+WEBSITE="https://yourwebsite.com"
+SECURITY_CONTACT="your-email@example.com"
+DETAILS="Your node description"
+AMOUNT="490000000uworrell"
+
+# JSON dosyasını oluştur
+cat <<EOF > $HOME/.worrell/validator.json
+{
+  "pubkey": $(worrelld tendermint show-validator --home $HOME/.worrell),
+  "amount": "${AMOUNT}",
+  "moniker": "${MONIKER}",
+  "identity": "${IDENTITY}",
+  "website": "${WEBSITE}",
+  "security": "${SECURITY_CONTACT}",
+  "details": "${DETAILS}",
+  "commission-rate": "0.05",
+  "commission-max-rate": "0.20",
+  "commission-max-change-rate": "0.01",
+  "min-self-delegation": "1000000"
+}
+EOF
+```
+```
+# Cüzdan adınızı ve port bilginizi tanımlayın
+WALLET="wallet-adı"
+PORT_PREFIX=$(grep 'WORRELL_PORT=' $HOME/.bash_profile 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" || echo "10")
+
+worrelld tx staking create-validator $HOME/.worrell/validator.json \
+  --from $WALLET \
+  --chain-id worrell-testnet-1 \
+  --home $HOME/.worrell \
+  --node tcp://127.0.0.1:${PORT_PREFIX}657 \
+  --gas auto \
+  --gas-adjustment 1.5 \
+  --gas-prices 0.025uworrell \
+  -y
+
+```
+
 ### 11) Node Yönetimi
 
 Alt menüden node durumunu görüntüleyebilir, yeniden başlatabilir,
