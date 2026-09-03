@@ -370,7 +370,7 @@ export WORRELL_PORT="$CUSTOM_PORT"
 EOF
 
     echo -e "${BLUE}Konfigürasyonlar ayarlanıyor...${NC}"
-    sed -i "s|^persistent_peers *=.*|persistent_peers = \"${PERSISTENT_PEER}\"|" $WORRELL_HOME/config/config.toml
+    sed -i -E "s|^([[:space:]]*persistent_peers[[:space:]]*=).*|\1 \"${PERSISTENT_PEER}\"|" $WORRELL_HOME/config/config.toml
     sed -i 's|minimum-gas-prices =.*|minimum-gas-prices = "'"${MIN_GAS_PRICE}"'"|g' $WORRELL_HOME/config/app.toml
     sed -i -e "s/^enable *=.*/enable = true/" $WORRELL_HOME/config/app.toml
 
