@@ -21,10 +21,7 @@ cüzdan/validator/node yönetimi işlemlerini menüden yapabilirsiniz.
 ## Kullanım
 
 ```bash
-git clone https://github.com/Edsny1/Worrel-Testnet.git
-cd Worrel-Testnet
-chmod +x worrell-node-manager.sh
-./worrell-node-manager.sh
+git clone https://github.com/Edsny1/Worrel-Testnet.git && cd Worrel-Testnet && chmod +x worrell-node-manager.sh && ./worrell-node-manager.sh
 ```
 
 Script açıldığında sırasıyla:
