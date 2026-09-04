@@ -54,13 +54,13 @@ get_node_rpc() {
     echo "tcp://127.0.0.1:${port}657"
 }
 
-# Kayıtlı Cüzdanı al
-get_saved_wallet() {
-    local w=""
+# Kayıtlı Cüzdan Adresini al
+get_saved_address() {
+    local addr=""
     if [ -f "$HOME/.bash_profile" ]; then
-        w=$(grep 'WORRELL_WALLET=' "$HOME/.bash_profile" | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        addr=$(grep 'WORRELL_WALLET_ADDRESS=' "$HOME/.bash_profile" | cut -d'=' -f2 | tr -d '"' | tr -d "'")
     fi
-    [ -z "$w" ] && echo "wallet" || echo "$w"
+    echo "$addr"
 }
 
 print_logo() {
@@ -183,9 +183,6 @@ install_node() {
     read -p "$(echo -e ${YELLOW}"Port Prefix girin [Varsayılan: 10]: "${NC})" CUSTOM_PORT
     [ -z "$CUSTOM_PORT" ] && CUSTOM_PORT="10"
 
-    read -p "$(echo -e ${YELLOW}"Cüzdan isminizi girin [Varsayılan: wallet]: "${NC})" WALLET_NAME
-    [ -z "$WALLET_NAME" ] && WALLET_NAME="wallet"
-
     install_dependencies
     install_go
     install_cosmovisor
@@ -214,20 +211,16 @@ install_node() {
     echo -e "${BLUE}Node yapılandırılıyor...${NC}"
     "$BIN_PATH" init "$MONIKER" --chain-id "$CHAIN_ID" --home "$WORRELL_HOME"
 
-    # client.toml yapılandırması
     "$BIN_PATH" config set client chain-id "$CHAIN_ID" --home "$WORRELL_HOME"
     "$BIN_PATH" config set client node "tcp://localhost:${CUSTOM_PORT}657" --home "$WORRELL_HOME"
 
-    # Genesis ve Addrbook indir
     echo -e "${BLUE}Genesis ve Addrbook indiriliyor...${NC}"
     wget -qO "$WORRELL_HOME/config/genesis.json" "$GENESIS_URL"
     wget -qO "$WORRELL_HOME/config/addrbook.json" "$ADDRBOOK_URL"
 
-    # Seeds ve Peers ayarla
     sed -i -e "/^\[p2p\]/,/^\[/{s/^[[:space:]]*seeds *=.*/seeds = \"$SEEDS\"/}" \
            -e "/^\[p2p\]/,/^\[/{s/^[[:space:]]*persistent_peers *=.*/persistent_peers = \"$PEERS\"/}" "$WORRELL_HOME/config/config.toml"
 
-    # app.toml port ayarları
     sed -i.bak -e "s%:1317%:${CUSTOM_PORT}317%g;
 s%:8080%:${CUSTOM_PORT}080%g;
 s%:9090%:${CUSTOM_PORT}090%g;
@@ -236,7 +229,6 @@ s%:8545%:${CUSTOM_PORT}545%g;
 s%:8546%:${CUSTOM_PORT}546%g;
 s%:6065%:${CUSTOM_PORT}065%g" "$WORRELL_HOME/config/app.toml"
 
-    # config.toml port ayarları (IPv4 zorlamalı)
     local ip_addr
     ip_addr=$(curl -4 -s ifconfig.me || wget -4 -qO- ifconfig.me || echo "127.0.0.1")
     sed -i.bak -e "s%:26658%:${CUSTOM_PORT}658%g;
@@ -246,7 +238,6 @@ s%:26656%:${CUSTOM_PORT}656%g;
 s%^external_address = \"\"%external_address = \"${ip_addr}:${CUSTOM_PORT}656\"%;
 s%:26660%:${CUSTOM_PORT}660%g" "$WORRELL_HOME/config/config.toml"
 
-    # Pruning ve Prometheus ayarları
     sed -i -e "s/^pruning *=.*/pruning = \"custom\"/" "$WORRELL_HOME/config/app.toml"
     sed -i -e "s/^pruning-keep-recent *=.*/pruning-keep-recent = \"100\"/" "$WORRELL_HOME/config/app.toml"
     sed -i -e "s/^pruning-interval *=.*/pruning-interval = \"19\"/" "$WORRELL_HOME/config/app.toml"
@@ -254,7 +245,6 @@ s%:26660%:${CUSTOM_PORT}660%g" "$WORRELL_HOME/config/config.toml"
     sed -i -e "s/prometheus = false/prometheus = true/" "$WORRELL_HOME/config/config.toml"
     sed -i -e "s/^indexer *=.*/indexer = \"null\"/" "$WORRELL_HOME/config/config.toml"
 
-    # Systemd servisini Cosmovisor ile kur
     echo -e "${BLUE}Cosmovisor systemd servisi oluşturuluyor...${NC}"
     sudo tee /etc/systemd/system/worrelld.service > /dev/null <<EOF
 [Unit]
@@ -278,16 +268,15 @@ Environment="UNSAFE_SKIP_BACKUP=true"
 WantedBy=multi-user.target
 EOF
 
-    # Çevresel değişkenleri kaydet
-    sed -i '/WORRELL_/d' "$HOME/.bash_profile" 2>/dev/null
+    sed -i '/WORRELL_PORT/d' "$HOME/.bash_profile" 2>/dev/null
+    sed -i '/WORRELL_CHAIN_ID/d' "$HOME/.bash_profile" 2>/dev/null
+    sed -i '/WORRELL_MONIKER/d' "$HOME/.bash_profile" 2>/dev/null
     cat <<EOF >> "$HOME/.bash_profile"
 export WORRELL_PORT="$CUSTOM_PORT"
 export WORRELL_CHAIN_ID="$CHAIN_ID"
 export WORRELL_MONIKER="$MONIKER"
-export WORRELL_WALLET="$WALLET_NAME"
 EOF
 
-    # Kurulum esnasında otomatik snapshot yükle
     echo -e "${YELLOW}Snapshot yükleniyor...${NC}"
     local SNAP_NAME
     SNAP_NAME=$(curl -s https://server-3.itrocket.net/testnet/worrell/ | grep -oE 'worrell_[0-9-]+_[0-9]+_snap\.tar\.lz4' | head -n 1)
@@ -325,10 +314,19 @@ create_wallet() {
     clear
     print_logo
     local BIN_PATH=$(get_binary)
-    read -p "$(echo -e ${YELLOW}"Yeni cüzdan ismi girin [Varsayılan: $(get_saved_wallet)]: "${NC})" WNAME
-    [ -z "$WNAME" ] && WNAME=$(get_saved_wallet)
+    read -p "$(echo -e ${YELLOW}"Yeni cüzdan ismi girin (örn: wallet): "${NC})" WNAME
+    [ -z "$WNAME" ] && { echo -e "${RED}Cüzdan ismi boş olamaz!${NC}"; sleep 2; return; }
 
     "$BIN_PATH" keys add "$WNAME" --home "$WORRELL_HOME"
+    
+    local NEW_ADDR
+    NEW_ADDR=$("$BIN_PATH" keys show "$WNAME" -a --home "$WORRELL_HOME" 2>/dev/null)
+    if [ -n "$NEW_ADDR" ]; then
+        sed -i '/WORRELL_WALLET_ADDRESS/d' "$HOME/.bash_profile" 2>/dev/null
+        echo "export WORRELL_WALLET_ADDRESS=\"$NEW_ADDR\"" >> "$HOME/.bash_profile"
+        echo -e "\n${GREEN}Cüzdan Adresi Profilinize Kaydedildi:${NC} $NEW_ADDR"
+    fi
+
     echo -e "${RED}\nYukarıdaki Mnemonic kelimelerini güvenli bir yere kaydedin!${NC}"
     read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
@@ -338,10 +336,19 @@ import_wallet() {
     clear
     print_logo
     local BIN_PATH=$(get_binary)
-    read -p "$(echo -e ${YELLOW}"Cüzdan ismi girin [Varsayılan: $(get_saved_wallet)]: "${NC})" WNAME
-    [ -z "$WNAME" ] && WNAME=$(get_saved_wallet)
+    read -p "$(echo -e ${YELLOW}"Cüzdan ismi girin: "${NC})" WNAME
+    [ -z "$WNAME" ] && { echo -e "${RED}Cüzdan ismi boş olamaz!${NC}"; sleep 2; return; }
 
     "$BIN_PATH" keys add "$WNAME" --recover --home "$WORRELL_HOME"
+    
+    local NEW_ADDR
+    NEW_ADDR=$("$BIN_PATH" keys show "$WNAME" -a --home "$WORRELL_HOME" 2>/dev/null)
+    if [ -n "$NEW_ADDR" ]; then
+        sed -i '/WORRELL_WALLET_ADDRESS/d' "$HOME/.bash_profile" 2>/dev/null
+        echo "export WORRELL_WALLET_ADDRESS=\"$NEW_ADDR\"" >> "$HOME/.bash_profile"
+        echo -e "\n${GREEN}Cüzdan Adresi Profilinize Kaydedildi:${NC} $NEW_ADDR"
+    fi
+
     read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
 
@@ -356,44 +363,48 @@ list_wallets() {
     read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
 
-# Bakiye Sorgulama
+# Bakiye Sorgulama (Doğrudan Adres ile)
 check_balance() {
     clear
     print_logo
     local BIN_PATH=$(get_binary)
     local RPC=$(get_node_rpc)
-    read -p "$(echo -e ${YELLOW}"Cüzdan ismi veya worrell adresi: "${NC})" WINPUT
-    [ -z "$WINPUT" ] && WINPUT=$(get_saved_wallet)
+    local DEFAULT_ADDR=$(get_saved_address)
 
-    local ADDR="$WINPUT"
-    if ! [[ "$WINPUT" =~ ^worrell ]]; then
-        ADDR=$("$BIN_PATH" keys show "$WINPUT" -a --home "$WORRELL_HOME" 2>/dev/null)
+    if [ -n "$DEFAULT_ADDR" ]; then
+        read -p "$(echo -e ${YELLOW}"worrell cüzdan adresinizi girin [Varsayılan: $DEFAULT_ADDR]: "${NC})" ADDR
+        [ -z "$ADDR" ] && ADDR="$DEFAULT_ADDR"
+    else
+        read -p "$(echo -e ${YELLOW}"worrell cüzdan adresinizi girin (worrell1...): "${NC})" ADDR
     fi
 
     if [ -z "$ADDR" ]; then
-        echo -e "${RED}Cüzdan adresi tespit edilemedi!${NC}"
-    else
-        echo -e "${CYAN}Adres: ${WHITE}$ADDR${NC}"
-        "$BIN_PATH" query bank balances "$ADDR" --home "$WORRELL_HOME" --node "$RPC"
+        echo -e "${RED}Adres boş bırakılamaz!${NC}"
+        sleep 2
+        return
     fi
-    read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
+
+    echo -e "\n${BLUE}Bakiye sorgulanıyor ($ADDR)...${NC}"
+    "$BIN_PATH" query bank balances "$ADDR" --home "$WORRELL_HOME" --node "$RPC"
+    
+    read -p "$(echo -e ${CYAN}"\nDevam etmek için Enter'a basın..."${NC})"
 }
 
-# Faucet İsteği
+# Faucet İsteği (Doğrudan Adres ile)
 request_faucet() {
     clear
     print_logo
-    local BIN_PATH=$(get_binary)
-    read -p "$(echo -e ${YELLOW}"Cüzdan ismi veya worrell adresi [Varsayılan: $(get_saved_wallet)]: "${NC})" WINPUT
-    [ -z "$WINPUT" ] && WINPUT=$(get_saved_wallet)
+    local DEFAULT_ADDR=$(get_saved_address)
 
-    local ADDR="$WINPUT"
-    if ! [[ "$WINPUT" =~ ^worrell ]]; then
-        ADDR=$("$BIN_PATH" keys show "$WINPUT" -a --home "$WORRELL_HOME" 2>/dev/null)
+    if [ -n "$DEFAULT_ADDR" ]; then
+        read -p "$(echo -e ${YELLOW}"Faucet talebi için worrell adresinizi girin [Varsayılan: $DEFAULT_ADDR]: "${NC})" ADDR
+        [ -z "$ADDR" ] && ADDR="$DEFAULT_ADDR"
+    else
+        read -p "$(echo -e ${YELLOW}"Faucet talebi için worrell adresinizi girin (worrell1...): "${NC})" ADDR
     fi
 
     if [ -z "$ADDR" ]; then
-        echo -e "${RED}Cüzdan adresi tespit edilemedi!${NC}"
+        echo -e "${RED}Adres boş bırakılamaz!${NC}"
         sleep 2
         return
     fi
@@ -411,15 +422,22 @@ request_faucet() {
     read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
 
-# Validator Oluşturma
+# Validator Oluşturma (Doğrudan Adres ile İmzalama)
 create_validator() {
     clear
     print_logo
     local BIN_PATH=$(get_binary)
     local RPC=$(get_node_rpc)
+    local DEFAULT_ADDR=$(get_saved_address)
 
-    read -p "Cüzdan ismi [Varsayılan: $(get_saved_wallet)]: " WNAME
-    [ -z "$WNAME" ] && WNAME=$(get_saved_wallet)
+    if [ -n "$DEFAULT_ADDR" ]; then
+        read -p "İşlemi imzalayacak cüzdan adresi (worrell1...) [Varsayılan: $DEFAULT_ADDR]: " SIGNER_ADDR
+        [ -z "$SIGNER_ADDR" ] && SIGNER_ADDR="$DEFAULT_ADDR"
+    else
+        read -p "İşlemi imzalayacak cüzdan adresi (worrell1...): " SIGNER_ADDR
+    fi
+
+    [ -z "$SIGNER_ADDR" ] && { echo -e "${RED}Cüzdan adresi zorunludur!${NC}"; sleep 2; return; }
 
     read -p "Moniker (Validator Adı): " MONIKER
     read -p "Stake Miktarı (örn: 490000000uworrell): " AMOUNT
@@ -454,7 +472,7 @@ EOF
     read -p "$(echo -e ${YELLOW}"Validator oluşturulsun mu? (y/n): "${NC})" CONFIRM
     if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
         "$BIN_PATH" tx staking create-validator "$WORRELL_HOME/validator.json" \
-            --from "$WNAME" \
+            --from "$SIGNER_ADDR" \
             --chain-id "$CHAIN_ID" \
             --home "$WORRELL_HOME" \
             --node "$RPC" \
