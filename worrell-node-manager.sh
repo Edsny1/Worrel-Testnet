@@ -46,6 +46,48 @@ get_node_rpc() {
     echo "tcp://127.0.0.1:${port}657"
 }
 
+# Kayıtlı cüzdanı otomatik tespit eder (test keyring'inde). Tek cüzdan varsa
+# onu döner; birden fazla varsa seçim menüsü gösterir; hiç yoksa hata verir.
+# NOT: Tüm bilgilendirme/menü metinleri stderr'e yazılır, stdout SADECE
+# seçilen cüzdan ismini döner ($(select_wallet) ile yakalanabilsin diye).
+select_wallet() {
+    local keys_json
+    keys_json=$($HOME/go/bin/worrelld keys list --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" --output json 2>/dev/null)
+
+    local count
+    count=$(echo "$keys_json" | jq 'length' 2>/dev/null)
+
+    if [ -z "$count" ] || [ "$count" = "0" ] || [ "$count" = "null" ]; then
+        echo -e "${RED}'${KEYRING_BACKEND}' keyring'inde kayıtlı cüzdan bulunamadı!${NC}" >&2
+        echo -e "${YELLOW}Önce 'Cüzdan Oluştur' veya 'Cüzdan İçe Aktar' seçeneğini kullanın.${NC}" >&2
+        echo -e "${YELLOW}(Not: Başka bir yöntemle -- ör. varsayılan 'os' backend ile -- oluşturulmuş${NC}" >&2
+        echo -e "${YELLOW}bir cüzdanınız varsa, bu 'test' keyring'inde görünmez; 'Cüzdan İçe Aktar'${NC}" >&2
+        echo -e "${YELLOW}ile aynı mnemonic'i buraya tekrar eklemeniz gerekir.)${NC}" >&2
+        return 1
+    fi
+
+    if [ "$count" -eq 1 ]; then
+        echo "$keys_json" | jq -r '.[0].name'
+        return 0
+    fi
+
+    echo -e "${CYAN}Birden fazla cüzdan bulundu:${NC}" >&2
+    local names=()
+    while IFS= read -r n; do names+=("$n"); done < <(echo "$keys_json" | jq -r '.[].name')
+    local i=1
+    for n in "${names[@]}"; do
+        echo -e "${WHITE}$i)${NC} $n" >&2
+        i=$((i+1))
+    done
+    read -p "$(echo -e ${YELLOW}"Cüzdan seçin [1-${#names[@]}]: "${NC})" sel < /dev/tty
+    if ! [[ "$sel" =~ ^[0-9]+$ ]] || [ "$sel" -lt 1 ] || [ "$sel" -gt "${#names[@]}" ]; then
+        echo -e "${RED}Geçersiz seçim!${NC}" >&2
+        return 1
+    fi
+    echo "${names[$((sel-1))]}"
+    return 0
+}
+
 # ASCII Art
 print_logo() {
     echo -e "${CYAN}"
@@ -541,17 +583,26 @@ import_wallet() {
 request_faucet() {
     clear
     print_logo
-    read -p "$(echo -e ${YELLOW}$(get_text enter_wallet)" (adresi almak için): "${NC})" WALLET_NAME
 
+    local WALLET_NAME
+    WALLET_NAME=$(select_wallet)
     if [ -z "$WALLET_NAME" ]; then
-        echo -e "${RED}Cüzdan ismi boş olamaz!${NC}"
-        sleep 2
+        sleep 3
         return
     fi
 
     ADDRESS=$($HOME/go/bin/worrelld keys show "$WALLET_NAME" -a --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" 2>/dev/null)
     if [ -z "$ADDRESS" ]; then
-        echo -e "${RED}Adres bulunamadı! Cüzdan ismini kontrol edin.${NC}"
+        echo -e "${RED}Adres bulunamadı! ('$WALLET_NAME' cüzdanı için adres çözümlenemedi)${NC}"
+        sleep 2
+        return
+    fi
+
+    echo -e "${CYAN}Cüzdan: ${WHITE}${WALLET_NAME}${NC}"
+    echo -e "${CYAN}Adres : ${WHITE}${ADDRESS}${NC}"
+    read -p "$(echo -e ${YELLOW}"Bu adrese faucet talebi gönderilsin mi? (y/n): "${NC})" confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        echo -e "${YELLOW}İşlem iptal edildi.${NC}"
         sleep 2
         return
     fi
@@ -570,9 +621,17 @@ create_validator() {
     clear
     print_logo
 
+    local WALLET_NAME
+    WALLET_NAME=$(select_wallet)
+    if [ -z "$WALLET_NAME" ]; then
+        sleep 3
+        return
+    fi
+    echo -e "${CYAN}Kullanılacak cüzdan: ${WHITE}${WALLET_NAME}${NC}"
+    echo
+
     echo -e "${YELLOW}Validator Detayları ($CHAIN_ID):${NC}"
     echo
-    read -p "Cüzdan ismi (--from): " WALLET_NAME
     read -p "Validator ismi (moniker): " V_MONIKER
     read -p "Identity (opsiyonel, Keybase ID): " IDENTITY
     read -p "Website (opsiyonel): " WEBSITE
@@ -584,8 +643,8 @@ create_validator() {
     read -p "Commission max change rate (örn: 0.01): " MAX_CHANGE_RATE
     read -p "Minimum self delegation (örn: 1000000): " MIN_SELF_DELEGATION
 
-    if [ -z "$WALLET_NAME" ] || [ -z "$V_MONIKER" ] || [ -z "$AMOUNT" ]; then
-        echo -e "${RED}Cüzdan ismi, moniker ve stake miktarı zorunludur!${NC}"
+    if [ -z "$V_MONIKER" ] || [ -z "$AMOUNT" ]; then
+        echo -e "${RED}Moniker ve stake miktarı zorunludur!${NC}"
         sleep 2
         return
     fi
@@ -647,9 +706,32 @@ delegate_tokens() {
     clear
     print_logo
 
-    read -p "Cüzdan ismi: " WALLET_NAME
+    local WALLET_NAME
+    WALLET_NAME=$(select_wallet)
+    if [ -z "$WALLET_NAME" ]; then
+        sleep 3
+        return
+    fi
+    echo -e "${CYAN}Kullanılacak cüzdan: ${WHITE}${WALLET_NAME}${NC}"
+    echo
+
     read -p "Validator adresi: " VALIDATOR_ADDR
     read -p "Miktar (örn: 1000000${DENOM}): " AMOUNT
+
+    if [ -z "$VALIDATOR_ADDR" ] || [ -z "$AMOUNT" ]; then
+        echo -e "${RED}Validator adresi ve miktar zorunludur!${NC}"
+        sleep 2
+        return
+    fi
+
+    echo
+    echo -e "${CYAN}Özet:${NC} ${WALLET_NAME} → ${VALIDATOR_ADDR} : ${AMOUNT}"
+    read -p "$(echo -e ${YELLOW}"Delegasyon işlemi gönderilsin mi? (y/n): "${NC})" confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        echo -e "${YELLOW}İşlem iptal edildi.${NC}"
+        sleep 2
+        return
+    fi
 
     $HOME/go/bin/worrelld tx staking delegate "$VALIDATOR_ADDR" "$AMOUNT" \
         --from "$WALLET_NAME" \
@@ -672,9 +754,32 @@ send_tokens() {
     clear
     print_logo
 
-    read -p "Gönderen cüzdan ismi: " WALLET_NAME
+    local WALLET_NAME
+    WALLET_NAME=$(select_wallet)
+    if [ -z "$WALLET_NAME" ]; then
+        sleep 3
+        return
+    fi
+    echo -e "${CYAN}Gönderen cüzdan: ${WHITE}${WALLET_NAME}${NC}"
+    echo
+
     read -p "Alıcı adres: " TO_ADDRESS
     read -p "Miktar (örn: 1000000${DENOM}): " AMOUNT
+
+    if [ -z "$TO_ADDRESS" ] || [ -z "$AMOUNT" ]; then
+        echo -e "${RED}Alıcı adres ve miktar zorunludur!${NC}"
+        sleep 2
+        return
+    fi
+
+    echo
+    echo -e "${CYAN}Özet:${NC} ${WALLET_NAME} → ${TO_ADDRESS} : ${AMOUNT}"
+    read -p "$(echo -e ${YELLOW}"Transfer gönderilsin mi? (y/n): "${NC})" confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        echo -e "${YELLOW}İşlem iptal edildi.${NC}"
+        sleep 2
+        return
+    fi
 
     $HOME/go/bin/worrelld tx bank send "$WALLET_NAME" "$TO_ADDRESS" "$AMOUNT" \
         --chain-id "$CHAIN_ID" \
@@ -696,20 +801,29 @@ check_balance() {
     clear
     print_logo
 
-    read -p "Cüzdan ismi veya adres: " WALLET_INPUT
+    read -p "Cüzdan ismi veya adres (boş bırakırsanız kayıtlı cüzdan otomatik seçilir): " WALLET_INPUT
 
-    echo -e "${BLUE}Bakiye sorgulanıyor ($CHAIN_ID)...${NC}"
     local TARGET_ADDR
     if [[ "$WALLET_INPUT" =~ ^worrell ]]; then
         TARGET_ADDR="$WALLET_INPUT"
-    else
+    elif [ -n "$WALLET_INPUT" ]; then
         TARGET_ADDR=$($HOME/go/bin/worrelld keys show "$WALLET_INPUT" -a --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" 2>/dev/null)
+    else
+        local auto_wallet
+        auto_wallet=$(select_wallet)
+        if [ -n "$auto_wallet" ]; then
+            TARGET_ADDR=$($HOME/go/bin/worrelld keys show "$auto_wallet" -a --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" 2>/dev/null)
+        fi
     fi
 
+    echo -e "${BLUE}Bakiye sorgulanıyor ($CHAIN_ID)...${NC}"
     if [ -z "$TARGET_ADDR" ]; then
         echo -e "${RED}Adres tespit edilemedi!${NC}"
     else
-        $HOME/go/bin/worrelld query bank balances "$TARGET_ADDR" --chain-id "$CHAIN_ID" --home "$WORRELL_HOME" --node "$(get_node_rpc)"
+        # NOT: query komutları --chain-id bayrağını KABUL ETMEZ (bu sadece
+        # imzalama gerektiren tx komutlarında kullanılır); node zaten RPC
+        # üzerinden doğru zincire bağlı.
+        $HOME/go/bin/worrelld query bank balances "$TARGET_ADDR" --home "$WORRELL_HOME" --node "$(get_node_rpc)"
     fi
 
     echo
