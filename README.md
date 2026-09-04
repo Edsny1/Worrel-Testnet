@@ -118,7 +118,13 @@ worrelld query bank balances <WORRELL_ADDRESS> --home $HOME/.worrell --node tcp:
 
 ### 9) Request Faucet Tokens
 
-Sends an automated API request to `[http://164.68.98.186:4500](http://164.68.98.186:4500)` for 500 WORRELL test tokens (rate limit: once per hour per address).
+```
+curl -X POST http://164.68.98.186:4500 \
+  -H "Content-Type: application/json" \
+  -d '{"address":"worrell1..."}'
+```
+
+Sends an automated API request to for 500 WORRELL test tokens (rate limit: once per hour per address).
 
 ### 10) Create Validator
 
