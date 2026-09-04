@@ -24,6 +24,7 @@ readonly CHAIN_ID="worrell-testnet-1"
 readonly DENOM="uworrell"
 readonly DAEMON_NAME="worrelld"
 readonly WORRELL_HOME="$HOME/.worrell"
+readonly KEYRING_BACKEND="test"
 WORRELL_REPO="worrellchain/worrell"
 WORRELL_VERSION="v0.1.2"
 NETWORKS_RAW="https://raw.githubusercontent.com/worrellchain/networks/main/worrell-testnet-1"
@@ -32,6 +33,7 @@ PERSISTENT_PEER="bb9164c1bd9ed9ff2c0fd9e09b23285698e231de@164.68.98.186:26656"
 MIN_GAS_PRICE="0.025uworrell"
 FAUCET_URL="http://164.68.98.186:4500"
 REQUIRED_GO_VERSION="1.23.5"
+STATESYNC_RPC="https://worrell.rpc.t.anode.team:443"
 
 # Mevcut portu oku veya varsayılan 10 ata
 get_node_rpc() {
@@ -114,6 +116,9 @@ get_text() {
             ;;
         "request_faucet")
             [ "$LANG_SEL" = "TR" ] && echo "Faucet'ten Token İste" || echo "Request Faucet Tokens"
+            ;;
+        "state_sync")
+            [ "$LANG_SEL" = "TR" ] && echo "State Sync (Hızlı Senkronizasyon)" || echo "State Sync (Fast Sync)"
             ;;
         "node_management")
             [ "$LANG_SEL" = "TR" ] && echo "Node Yönetimi" || echo "Node Management"
@@ -370,20 +375,44 @@ export WORRELL_PORT="$CUSTOM_PORT"
 EOF
 
     echo -e "${BLUE}Konfigürasyonlar ayarlanıyor...${NC}"
+
+    # Keyring backend / chain-id / node adresini client.toml içine kalıcı olarak yaz.
+    # Böylece bundan sonraki her worrelld komutu (keys/tx/query) her seferinde
+    # --keyring-backend / --chain-id / --node bayraklarına ihtiyaç duymadan
+    # doğru ayarları kullanır (os keyring'de takılma sorununu da önler).
+    $HOME/go/bin/worrelld config set client keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" >/dev/null 2>&1
+    $HOME/go/bin/worrelld config set client chain-id "$CHAIN_ID" --home "$WORRELL_HOME" >/dev/null 2>&1
+    $HOME/go/bin/worrelld config set client node "tcp://127.0.0.1:${CUSTOM_PORT}657" --home "$WORRELL_HOME" >/dev/null 2>&1
+
+    # Persistent peer (uzak node'un portuna DOKUNMADAN, olduğu gibi yazılır)
     sed -i -E "s|^([[:space:]]*persistent_peers[[:space:]]*=).*|\1 \"${PERSISTENT_PEER}\"|" $WORRELL_HOME/config/config.toml
     sed -i 's|minimum-gas-prices =.*|minimum-gas-prices = "'"${MIN_GAS_PRICE}"'"|g' $WORRELL_HOME/config/app.toml
     sed -i -e "s/^enable *=.*/enable = true/" $WORRELL_HOME/config/app.toml
 
-    # Port yapılandırması
-    sed -i.bak -e "s%:1317%:${CUSTOM_PORT}317%g;
-s%:9090%:${CUSTOM_PORT}090%g" $WORRELL_HOME/config/app.toml
+    # -----------------------------------------------------------------------
+    # Port yapılandırması — ÖNEMLİ: sadece SPESİFİK anahtar+host desenlerine
+    # (ör. "laddr = tcp://0.0.0.0:26656") göre değiştiriyoruz, dosyadaki HER
+    # ":26656" geçen yeri (mesela persistent_peers satırındaki UZAK peer'in
+    # portu) değil. Aksi halde uzak peer portu da yanlışlıkla yerel port
+    # prefix'i ile değiştirilir ve peşleşme/handshake başarısız olur.
+    # -----------------------------------------------------------------------
 
-    sed -i.bak -e "s%:26658%:${CUSTOM_PORT}658%g;
-s%:26657%:${CUSTOM_PORT}657%g;
-s%:6060%:${CUSTOM_PORT}060%g;
-s%:26656%:${CUSTOM_PORT}656%g;
-s%^external_address = \"\"%external_address = \"$(curl -4 -s ifconfig.me || wget -4 -qO- ifconfig.me):${CUSTOM_PORT}656\"%;
-s%:26660%:${CUSTOM_PORT}660%g" $WORRELL_HOME/config/config.toml
+    # app.toml — API / gRPC (bu anahtarlar dosyada tektir, güvenle değiştirilir)
+    sed -i -E "s|^([[:space:]]*address[[:space:]]*=[[:space:]]*\"tcp://0\.0\.0\.0:)1317(\")|\1${CUSTOM_PORT}317\2|" $WORRELL_HOME/config/app.toml
+    sed -i -E "s|^([[:space:]]*address[[:space:]]*=[[:space:]]*\"0\.0\.0\.0:)9090(\")|\1${CUSTOM_PORT}090\2|" $WORRELL_HOME/config/app.toml
+
+    # config.toml — proxy_app (127.0.0.1 host'una anchor'lı, tek satır)
+    sed -i -E "s|^([[:space:]]*proxy_app[[:space:]]*=[[:space:]]*\"tcp://127\.0\.0\.1:)26658(\")|\1${CUSTOM_PORT}658\2|" $WORRELL_HOME/config/config.toml
+    # config.toml — RPC laddr (SADECE 127.0.0.1 host'unda, p2p'nin 0.0.0.0 host'u ile karışmaz)
+    sed -i -E "s|^([[:space:]]*laddr[[:space:]]*=[[:space:]]*\"tcp://127\.0\.0\.1:)26657(\")|\1${CUSTOM_PORT}657\2|" $WORRELL_HOME/config/config.toml
+    # config.toml — pprof
+    sed -i -E "s|^([[:space:]]*pprof_laddr[[:space:]]*=[[:space:]]*\"localhost:)6060(\")|\1${CUSTOM_PORT}060\2|" $WORRELL_HOME/config/config.toml
+    # config.toml — P2P laddr (SADECE 0.0.0.0 host'unda, rpc'nin 127.0.0.1 host'u ile karışmaz)
+    sed -i -E "s|^([[:space:]]*laddr[[:space:]]*=[[:space:]]*\"tcp://0\.0\.0\.0:)26656(\")|\1${CUSTOM_PORT}656\2|" $WORRELL_HOME/config/config.toml
+    # config.toml — external_address (boşsa doldur)
+    sed -i -E "s|^([[:space:]]*external_address[[:space:]]*=[[:space:]]*)\"\"|\1\"$(curl -4 -s ifconfig.me || wget -4 -qO- ifconfig.me):${CUSTOM_PORT}656\"|" $WORRELL_HOME/config/config.toml
+    # config.toml — prometheus
+    sed -i -E "s|^([[:space:]]*prometheus_listen_addr[[:space:]]*=[[:space:]]*\":)26660(\")|\1${CUSTOM_PORT}660\2|" $WORRELL_HOME/config/config.toml
 
     # Pruning ayarları
     sed -i -e "s/^pruning *=.*/pruning = \"custom\"/" $WORRELL_HOME/config/app.toml
@@ -451,9 +480,11 @@ check_sync_status() {
     print_logo
     echo -e "${BLUE}Sync Durumu ($CHAIN_ID):${NC}"
     echo
-    $HOME/go/bin/worrelld status --home "$WORRELL_HOME" --node "$(get_node_rpc)" 2>&1 | jq .SyncInfo
+    # CometBFT/Tendermint sürümüne göre alan adı "SyncInfo" (eski/PascalCase)
+    # ya da "sync_info" (yeni/snake_case) olabilir; ikisini de deniyoruz.
+    $HOME/go/bin/worrelld status --home "$WORRELL_HOME" --node "$(get_node_rpc)" 2>&1 | jq '.SyncInfo // .sync_info // .result.SyncInfo // .result.sync_info'
     echo
-    echo -e "${YELLOW}Catching Up: false ise sync tamamlanmıştır${NC}"
+    echo -e "${YELLOW}Catching Up / catching_up: false ise sync tamamlanmıştır${NC}"
     read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
 }
 
@@ -478,7 +509,7 @@ create_wallet() {
         return
     fi
 
-    $HOME/go/bin/worrelld keys add "$WALLET_NAME" --home "$WORRELL_HOME"
+    $HOME/go/bin/worrelld keys add "$WALLET_NAME" --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME"
     echo
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo -e "${GREEN}Cüzdan oluşturuldu!${NC}"
@@ -500,7 +531,7 @@ import_wallet() {
         return
     fi
 
-    $HOME/go/bin/worrelld keys add "$WALLET_NAME" --recover --home "$WORRELL_HOME"
+    $HOME/go/bin/worrelld keys add "$WALLET_NAME" --recover --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME"
     echo
     echo -e "${GREEN}Cüzdan içe aktarıldı!${NC}"
     read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
@@ -518,7 +549,7 @@ request_faucet() {
         return
     fi
 
-    ADDRESS=$($HOME/go/bin/worrelld keys show "$WALLET_NAME" -a --home "$WORRELL_HOME" 2>/dev/null)
+    ADDRESS=$($HOME/go/bin/worrelld keys show "$WALLET_NAME" -a --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" 2>/dev/null)
     if [ -z "$ADDRESS" ]; then
         echo -e "${RED}Adres bulunamadı! Cüzdan ismini kontrol edin.${NC}"
         sleep 2
@@ -534,44 +565,75 @@ request_faucet() {
     read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
 }
 
-# Validator oluştur
+# Validator oluştur (JSON dosyası ile — Cosmos SDK v0.53+ akışı)
 create_validator() {
     clear
     print_logo
 
     echo -e "${YELLOW}Validator Detayları ($CHAIN_ID):${NC}"
     echo
-    read -p "Cüzdan ismi: " WALLET_NAME
-    read -p "Validator ismi (moniker): " MONIKER
+    read -p "Cüzdan ismi (--from): " WALLET_NAME
+    read -p "Validator ismi (moniker): " V_MONIKER
     read -p "Identity (opsiyonel, Keybase ID): " IDENTITY
     read -p "Website (opsiyonel): " WEBSITE
     read -p "Security Contact (email): " SECURITY
     read -p "Details (açıklama): " DETAILS
+    read -p "Stake miktarı (örn: 490000000${DENOM}): " AMOUNT
     read -p "Commission rate (örn: 0.05): " RATE
     read -p "Commission max rate (örn: 0.20): " MAX_RATE
     read -p "Commission max change rate (örn: 0.01): " MAX_CHANGE_RATE
-    read -p "Minimum self delegation (örn: 1): " MIN_SELF_DELEGATION
-    read -p "Stake miktarı (örn: 1000000${DENOM}): " AMOUNT
+    read -p "Minimum self delegation (örn: 1000000): " MIN_SELF_DELEGATION
 
-    $HOME/go/bin/worrelld tx staking create-validator \
-        --amount="$AMOUNT" \
-        --pubkey="$($HOME/go/bin/worrelld tendermint show-validator --home "$WORRELL_HOME")" \
-        --moniker="$MONIKER" \
-        --identity="$IDENTITY" \
-        --website="$WEBSITE" \
-        --security-contact="$SECURITY" \
-        --details="$DETAILS" \
-        --chain-id="$CHAIN_ID" \
-        --commission-rate="$RATE" \
-        --commission-max-rate="$MAX_RATE" \
-        --commission-max-change-rate="$MAX_CHANGE_RATE" \
-        --min-self-delegation="$MIN_SELF_DELEGATION" \
-        --from="$WALLET_NAME" \
-        --home="$WORRELL_HOME" \
-        --node="$(get_node_rpc)" \
-        --gas="auto" \
-        --gas-adjustment="1.4" \
-        --fees="500${DENOM}" \
+    if [ -z "$WALLET_NAME" ] || [ -z "$V_MONIKER" ] || [ -z "$AMOUNT" ]; then
+        echo -e "${RED}Cüzdan ismi, moniker ve stake miktarı zorunludur!${NC}"
+        sleep 2
+        return
+    fi
+
+    PUBKEY_JSON=$($HOME/go/bin/worrelld tendermint show-validator --home "$WORRELL_HOME" 2>/dev/null)
+    if [ -z "$PUBKEY_JSON" ]; then
+        echo -e "${RED}Pubkey alınamadı! Node kurulu ve init edilmiş mi kontrol edin.${NC}"
+        sleep 2
+        return
+    fi
+
+    cat <<EOF > "$WORRELL_HOME/validator.json"
+{
+  "pubkey": ${PUBKEY_JSON},
+  "amount": "${AMOUNT}",
+  "moniker": "${V_MONIKER}",
+  "identity": "${IDENTITY}",
+  "website": "${WEBSITE}",
+  "security": "${SECURITY}",
+  "details": "${DETAILS}",
+  "commission-rate": "${RATE}",
+  "commission-max-rate": "${MAX_RATE}",
+  "commission-max-change-rate": "${MAX_CHANGE_RATE}",
+  "min-self-delegation": "${MIN_SELF_DELEGATION}"
+}
+EOF
+
+    echo
+    echo -e "${CYAN}Oluşturulan validator.json (${WORRELL_HOME}/validator.json):${NC}"
+    echo -e "${WHITE}$(cat "$WORRELL_HOME/validator.json")${NC}"
+    echo
+    read -p "$(echo -e ${YELLOW}"Bu bilgilerle validator oluşturmak istiyor musunuz? (y/n): "${NC})" confirm
+
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        echo -e "${YELLOW}İşlem iptal edildi. validator.json diskte bırakıldı, dilerseniz düzenleyip tekrar deneyebilirsiniz.${NC}"
+        sleep 2
+        return
+    fi
+
+    $HOME/go/bin/worrelld tx staking create-validator "$WORRELL_HOME/validator.json" \
+        --from "$WALLET_NAME" \
+        --chain-id "$CHAIN_ID" \
+        --home "$WORRELL_HOME" \
+        --node "$(get_node_rpc)" \
+        --keyring-backend "$KEYRING_BACKEND" \
+        --gas auto \
+        --gas-adjustment 1.5 \
+        --gas-prices "$MIN_GAS_PRICE" \
         -y
 
     echo
@@ -590,13 +652,14 @@ delegate_tokens() {
     read -p "Miktar (örn: 1000000${DENOM}): " AMOUNT
 
     $HOME/go/bin/worrelld tx staking delegate "$VALIDATOR_ADDR" "$AMOUNT" \
-        --from="$WALLET_NAME" \
-        --chain-id="$CHAIN_ID" \
-        --home="$WORRELL_HOME" \
-        --node="$(get_node_rpc)" \
-        --gas="auto" \
-        --gas-adjustment="1.4" \
-        --fees="500${DENOM}" \
+        --from "$WALLET_NAME" \
+        --chain-id "$CHAIN_ID" \
+        --home "$WORRELL_HOME" \
+        --node "$(get_node_rpc)" \
+        --keyring-backend "$KEYRING_BACKEND" \
+        --gas auto \
+        --gas-adjustment 1.4 \
+        --gas-prices "$MIN_GAS_PRICE" \
         -y
 
     echo
@@ -614,12 +677,13 @@ send_tokens() {
     read -p "Miktar (örn: 1000000${DENOM}): " AMOUNT
 
     $HOME/go/bin/worrelld tx bank send "$WALLET_NAME" "$TO_ADDRESS" "$AMOUNT" \
-        --chain-id="$CHAIN_ID" \
-        --home="$WORRELL_HOME" \
-        --node="$(get_node_rpc)" \
-        --gas="auto" \
-        --gas-adjustment="1.4" \
-        --fees="500${DENOM}" \
+        --chain-id "$CHAIN_ID" \
+        --home "$WORRELL_HOME" \
+        --node "$(get_node_rpc)" \
+        --keyring-backend "$KEYRING_BACKEND" \
+        --gas auto \
+        --gas-adjustment 1.4 \
+        --gas-prices "$MIN_GAS_PRICE" \
         -y
 
     echo
@@ -639,17 +703,91 @@ check_balance() {
     if [[ "$WALLET_INPUT" =~ ^worrell ]]; then
         TARGET_ADDR="$WALLET_INPUT"
     else
-        TARGET_ADDR=$($HOME/go/bin/worrelld keys show "$WALLET_INPUT" -a --home "$WORRELL_HOME" 2>/dev/null)
+        TARGET_ADDR=$($HOME/go/bin/worrelld keys show "$WALLET_INPUT" -a --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" 2>/dev/null)
     fi
 
     if [ -z "$TARGET_ADDR" ]; then
         echo -e "${RED}Adres tespit edilemedi!${NC}"
     else
-        $HOME/go/bin/worrelld query bank balances "$TARGET_ADDR" --chain-id="$CHAIN_ID" --home="$WORRELL_HOME" --node="$(get_node_rpc)"
+        $HOME/go/bin/worrelld query bank balances "$TARGET_ADDR" --chain-id "$CHAIN_ID" --home "$WORRELL_HOME" --node "$(get_node_rpc)"
     fi
 
     echo
     read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+}
+
+# State Sync (hızlı senkronizasyon; resmi snapshot servisi olmadığı için)
+state_sync_menu() {
+    while true; do
+        clear
+        print_logo
+        echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}   $(get_text state_sync)          ${CYAN}║${NC}"
+        echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
+        echo
+        echo -e "${YELLOW}State Sync, node'un genesis'ten başlamak yerine yakın${NC}"
+        echo -e "${YELLOW}zamanlı güvenilir bir state'ten senkronize olmasını sağlar.${NC}"
+        echo
+        echo -e "${WHITE}1)${NC} State Sync'i Etkinleştir ve Başlat"
+        echo -e "${WHITE}2)${NC} State Sync'i Kapat (senkron tamamlandıktan sonra)"
+        echo -e "${WHITE}0)${NC} $(get_text back)"
+        echo
+        read -p "$(echo -e ${YELLOW}"Seçiminiz: "${NC})" ss_choice
+
+        case $ss_choice in
+            1)
+                echo -e "${RED}⚠ Bu işlem node'un mevcut state verisini sıfırlayacaktır (priv_validator_state.json korunur).${NC}"
+                read -p "$(echo -e ${YELLOW}"Devam edilsin mi? (y/n): "${NC})" ss_confirm
+                if [ "$ss_confirm" != "y" ] && [ "$ss_confirm" != "Y" ]; then
+                    echo -e "${YELLOW}İptal edildi.${NC}"
+                    sleep 2
+                    continue
+                fi
+
+                echo -e "${BLUE}Node durduruluyor...${NC}"
+                sudo systemctl stop worrelld
+
+                echo -e "${BLUE}Eski state verileri temizleniyor (addrbook korunuyor)...${NC}"
+                $HOME/go/bin/worrelld tendermint unsafe-reset-all --home "$WORRELL_HOME" --keep-addr-book
+
+                echo -e "${BLUE}Güvenilir blok bilgisi alınıyor...${NC}"
+                LATEST_HEIGHT=$(curl -s "$STATESYNC_RPC/block" | jq -r .result.block.header.height)
+                if [ -z "$LATEST_HEIGHT" ] || [ "$LATEST_HEIGHT" = "null" ]; then
+                    echo -e "${RED}RPC'den blok yüksekliği alınamadı! ${STATESYNC_RPC} erişilebilir mi kontrol edin.${NC}"
+                    sleep 3
+                    continue
+                fi
+                BLOCK_HEIGHT=$((LATEST_HEIGHT - 2000))
+                TRUST_HASH=$(curl -s "$STATESYNC_RPC/block?height=$BLOCK_HEIGHT" | jq -r .result.block_id.hash)
+
+                echo -e "${GREEN}Hedef Blok: $BLOCK_HEIGHT${NC}"
+                echo -e "${GREEN}Hedef Hash: $TRUST_HASH${NC}"
+
+                sed -i -E "s|^([[:space:]]*enable[[:space:]]*=).*|\1 true|" "$WORRELL_HOME/config/config.toml"
+                sed -i -E "s|^([[:space:]]*rpc_servers[[:space:]]*=).*|\1 \"${STATESYNC_RPC},${STATESYNC_RPC}\"|" "$WORRELL_HOME/config/config.toml"
+                sed -i -E "s|^([[:space:]]*trust_height[[:space:]]*=).*|\1 $BLOCK_HEIGHT|" "$WORRELL_HOME/config/config.toml"
+                sed -i -E "s|^([[:space:]]*trust_hash[[:space:]]*=).*|\1 \"$TRUST_HASH\"|" "$WORRELL_HOME/config/config.toml"
+
+                echo -e "${BLUE}Servis yeniden başlatılıyor...${NC}"
+                sudo systemctl restart worrelld
+                echo -e "${GREEN}State sync başlatıldı. Logları izlemek için: sudo journalctl -u worrelld -f -o cat${NC}"
+                read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+                ;;
+            2)
+                sed -i -E "s|^([[:space:]]*enable[[:space:]]*=).*|\1 false|" "$WORRELL_HOME/config/config.toml"
+                sudo systemctl restart worrelld
+                echo -e "${GREEN}State sync kapatıldı ve node yeniden başlatıldı.${NC}"
+                sleep 2
+                ;;
+            0)
+                return
+                ;;
+            *)
+                echo -e "${RED}Geçersiz seçim!${NC}"
+                sleep 2
+                ;;
+        esac
+    done
 }
 
 # Node yönetimi menüsü
@@ -752,7 +890,8 @@ main_menu() {
         echo -e "${WHITE}8)${NC}  $(get_text send_tokens)"
         echo -e "${WHITE}9)${NC}  $(get_text check_balance)"
         echo -e "${WHITE}10)${NC} $(get_text request_faucet)"
-        echo -e "${WHITE}11)${NC} $(get_text node_management)"
+        echo -e "${WHITE}11)${NC} $(get_text state_sync)"
+        echo -e "${WHITE}12)${NC} $(get_text node_management)"
         echo -e "${WHITE}0)${NC}  $(get_text exit)"
         echo
         read -p "$(echo -e ${YELLOW}"Seçiminiz / Your choice: "${NC})" choice
@@ -768,7 +907,8 @@ main_menu() {
             8) send_tokens ;;
             9) check_balance ;;
             10) request_faucet ;;
-            11) node_management_menu ;;
+            11) state_sync_menu ;;
+            12) node_management_menu ;;
             0)
                 echo -e "${GREEN}Çıkılıyor... / Exiting...${NC}"
                 exit 0
