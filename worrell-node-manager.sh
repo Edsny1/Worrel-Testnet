@@ -1,11 +1,9 @@
 #!/bin/bash
 
 # ==============================================================================
-# Worrell Testnet Node Manager
+# Worrell Testnet Node Manager (Cosmovisor Integrated)
 #   Chain ID : worrell-testnet-1
-#   Binary   : worrelld (Cosmos SDK v0.53.6)
-#   Source   : https://github.com/worrellchain/worrell @ v0.1.2
-#   Networks : https://github.com/worrellchain/networks
+#   Binary   : worrelld (v0.1.2) via Cosmovisor
 #   Repo     : https://github.com/Edsny1/Worrel-Testnet
 # ==============================================================================
 
@@ -14,28 +12,38 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
-# Chain sabitleri (Tamamı izole ve sabittir)
+# Sabitler
 readonly CHAIN_ID="worrell-testnet-1"
 readonly DENOM="uworrell"
 readonly DAEMON_NAME="worrelld"
 readonly WORRELL_HOME="$HOME/.worrell"
-readonly KEYRING_BACKEND="test"
-WORRELL_REPO="worrellchain/worrell"
-WORRELL_VERSION="v0.1.2"
-NETWORKS_RAW="https://raw.githubusercontent.com/worrellchain/networks/main/worrell-testnet-1"
-GENESIS_SHA256="a81c507b12ba0678c3172394ff4bb03e1c3db60050cc5568c127a24ec19378fd"
-PERSISTENT_PEER="bb9164c1bd9ed9ff2c0fd9e09b23285698e231de@164.68.98.186:26656"
-MIN_GAS_PRICE="0.025uworrell"
-FAUCET_URL="http://164.68.98.186:4500"
-REQUIRED_GO_VERSION="1.23.5"
-STATESYNC_RPC="https://worrell.rpc.t.anode.team:443"
+readonly REPO_URL="https://github.com/worrellchain/worrell.git"
+readonly REPO_VERSION="v0.1.2"
+readonly GENESIS_URL="https://server-3.itrocket.net/testnet/worrell/genesis.json"
+readonly ADDRBOOK_URL="https://server-3.itrocket.net/testnet/worrell/addrbook.json"
+readonly SEEDS="3856d067b900fb6d6136c597a631296dd12c84ad@worrell-testnet-seed.itrocket.net:12656"
+readonly PEERS="40128ea31b1cfb5d4b24fc9e32ee0c468586c983@worrell-testnet-peer.itrocket.net:12656,754f6a93b484b6486eac888a2fcbf76430152817@65.108.229.19:27006,bb9164c1bd9ed9ff2c0fd9e09b23285698e231de@164.68.98.186:26656,34d2f0b735d951a293e0862e9c2afaba8a54100a@93.159.130.41:31656,5222f1c8916513add07e847be033b145f31bdeaf@65.109.85.159:12656"
+readonly MIN_GAS_PRICE="0.025uworrell"
+readonly FAUCET_URL="http://164.68.98.186:4500"
 
-# Mevcut portu oku veya varsayılan 10 ata
+# Binary konumu
+get_binary() {
+    if command -v worrelld &>/dev/null; then
+        command -v worrelld
+    elif [ -f "$HOME/go/bin/worrelld" ]; then
+        echo "$HOME/go/bin/worrelld"
+    elif [ -f "$WORRELL_HOME/cosmovisor/current/bin/worrelld" ]; then
+        echo "$WORRELL_HOME/cosmovisor/current/bin/worrelld"
+    else
+        echo "worrelld"
+    fi
+}
+
+# Kayıtlı RPC Portunu getir
 get_node_rpc() {
     local port="10"
     if [ -f "$HOME/.bash_profile" ]; then
@@ -46,486 +54,219 @@ get_node_rpc() {
     echo "tcp://127.0.0.1:${port}657"
 }
 
-# Kayıtlı cüzdanı otomatik tespit eder (test keyring'inde). Tek cüzdan varsa
-# onu döner; birden fazla varsa seçim menüsü gösterir; hiç yoksa hata verir.
-# NOT: Tüm bilgilendirme/menü metinleri stderr'e yazılır, stdout SADECE
-# seçilen cüzdan ismini döner ($(select_wallet) ile yakalanabilsin diye).
-select_wallet() {
-    if ! command -v jq >/dev/null 2>&1; then
-        echo -e "${RED}'jq' komutu bulunamadı! Cüzdanlar tespit edilemiyor.${NC}" >&2
-        echo -e "${YELLOW}Kurmak için: sudo apt-get install jq -y${NC}" >&2
-        return 1
+# Kayıtlı Cüzdanı al
+get_saved_wallet() {
+    local w=""
+    if [ -f "$HOME/.bash_profile" ]; then
+        w=$(grep 'WORRELL_WALLET=' "$HOME/.bash_profile" | cut -d'=' -f2 | tr -d '"' | tr -d "'")
     fi
+    [ -z "$w" ] && echo "wallet" || echo "$w"
+}
 
-    local err_file
-    err_file=$(mktemp)
-    local keys_json
-    keys_json=$($HOME/go/bin/worrelld keys list --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" --output json 2>"$err_file")
-    local rc=$?
-    local keys_err
-    keys_err=$(cat "$err_file")
-    rm -f "$err_file"
+print_logo() {
+    echo -e "${CYAN}"
+    echo " ██████╗ ███████╗██╗  ██╗██╗   ██╗ █████╗ ███╗   ██╗██╗  ██╗"
+    echo "██╔═══██╗██╔════╝██║  ██║██║   ██║██╔══██╗████╗  ██║██║ ██╔╝"
+    echo "██║   ██║███████╗███████║██║   ██║███████║██╔██╗ ██║█████╔╝ "
+    echo "██║   ██║╚════██║██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║██╔═██╗ "
+    echo "╚██████╔╝███████║██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██║  ██╗"
+    echo " ╚═════╝ ╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝"
+    echo -e "${NC}"
+    echo -e "${YELLOW}================================================================${NC}"
+    echo -e "${WHITE}           Worrell Testnet ($CHAIN_ID) - Node Manager${NC}"
+    echo -e "${WHITE}                      Repo: Edsny1/Worrel-Testnet${NC}"
+    echo -e "${YELLOW}================================================================${NC}\n"
+}
 
-    if [ $rc -ne 0 ]; then
-        echo -e "${RED}'worrelld keys list' komutu hata verdi (exit code: $rc):${NC}" >&2
-        echo -e "${YELLOW}${keys_err}${NC}" >&2
-        echo -e "${YELLOW}Kontrol edin: $HOME/go/bin/worrelld dosyası var mı? ${WORRELL_HOME} doğru mu?${NC}" >&2
-        return 1
-    fi
-
-    local count
-    count=$(echo "$keys_json" | jq 'length' 2>/dev/null)
-
-    if [ -z "$count" ] || [ "$count" = "0" ] || [ "$count" = "null" ]; then
-        echo -e "${RED}'${KEYRING_BACKEND}' keyring'inde kayıtlı cüzdan bulunamadı.${NC}" >&2
-        echo -e "${YELLOW}Aranan konum: ${WORRELL_HOME}/keyring-${KEYRING_BACKEND}${NC}" >&2
-        if [ -n "$keys_err" ]; then
-            echo -e "${YELLOW}worrelld çıktısı: ${keys_err}${NC}" >&2
+# Go Kurulumu
+install_go() {
+    local required_ver="1.23.5"
+    if command -v go &>/dev/null; then
+        local current_ver
+        current_ver=$(go version | awk '{print $3}' | sed 's/go//')
+        if [ "$(printf '%s\n' "$required_ver" "$current_ver" | sort -V | head -n1)" = "$required_ver" ]; then
+            echo -e "${GREEN}Mevcut Go sürümü yeterli: v$current_ver${NC}"
+            return
         fi
-        echo -e "${YELLOW}Ham komut çıktısı: ${keys_json}${NC}" >&2
-        echo -e "${YELLOW}Önce 'Cüzdan Oluştur' veya 'Cüzdan İçe Aktar' seçeneğini kullanın,${NC}" >&2
-        echo -e "${YELLOW}ya da 'Cüzdanları Listele' ile mevcut durumu kontrol edin.${NC}" >&2
+    fi
+
+    echo -e "${BLUE}Go $required_ver kuruluyor...${NC}"
+    cd "$HOME"
+    wget -q "https://golang.org/dl/go${required_ver}.linux-amd64.tar.gz"
+    sudo rm -rf /usr/local/go
+    sudo tar -C /usr/local -xzf "go${required_ver}.linux-amd64.tar.gz"
+    rm -f "go${required_ver}.linux-amd64.tar.gz"
+
+    mkdir -p "$HOME/go/bin"
+    export GOROOT=/usr/local/go
+    export GOPATH="$HOME/go"
+    export PATH="$PATH:/usr/local/go/bin:$HOME/go/bin"
+
+    if ! grep -q "/usr/local/go/bin" "$HOME/.bash_profile" 2>/dev/null; then
+        echo 'export PATH=$PATH:/usr/local/go/bin:~/go/bin' >> "$HOME/.bash_profile"
+    fi
+}
+
+# Bağımlılıklar
+install_dependencies() {
+    echo -e "${BLUE}Sistem bağımlılıkları güncelleniyor...${NC}"
+    sudo apt update
+    sudo apt install -y curl git jq lz4 build-essential make gcc tar wget
+}
+
+# Cosmovisor Kurulumu
+install_cosmovisor() {
+    echo -e "${BLUE}Cosmovisor kontrol ediliyor/kuruluyor...${NC}"
+    if ! command -v cosmovisor &>/dev/null; then
+        go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@latest
+    fi
+    echo -e "${GREEN}Cosmovisor hazır: $(cosmovisor version 2>&1 | head -n 1)${NC}"
+}
+
+# Snapshot İndirme ve Yükleme
+apply_snapshot() {
+    clear
+    print_logo
+    echo -e "${BLUE}ITRocket üzerinden en güncel snapshot kontrol ediliyor...${NC}"
+    
+    local SNAP_NAME
+    SNAP_NAME=$(curl -s https://server-3.itrocket.net/testnet/worrell/ | grep -oE 'worrell_[0-9-]+_[0-9]+_snap\.tar\.lz4' | head -n 1)
+
+    if [ -z "$SNAP_NAME" ]; then
+        echo -e "${RED}Snapshot bulunamadı! Lütfen https://server-3.itrocket.net/testnet/worrell/ adresini kontrol edin.${NC}"
+        read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
         return 1
     fi
 
-    if [ "$count" -eq 1 ]; then
-        echo "$keys_json" | jq -r '.[0].name'
+    echo -e "${GREEN}Bulunan Snapshot:${NC} $SNAP_NAME"
+    read -p "$(echo -e ${YELLOW}"Snapshot yüklenirken veritabanı sıfırlanacak. Devam edilsin mi? (y/n): "${NC})" confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        echo -e "${YELLOW}İşlem iptal edildi.${NC}"
+        sleep 2
         return 0
     fi
 
-    echo -e "${CYAN}Birden fazla cüzdan bulundu:${NC}" >&2
-    local names=()
-    while IFS= read -r n; do names+=("$n"); done < <(echo "$keys_json" | jq -r '.[].name')
-    local i=1
-    for n in "${names[@]}"; do
-        echo -e "${WHITE}$i)${NC} $n" >&2
-        i=$((i+1))
-    done
-    read -p "$(echo -e ${YELLOW}"Cüzdan seçin [1-${#names[@]}]: "${NC})" sel < /dev/tty
-    if ! [[ "$sel" =~ ^[0-9]+$ ]] || [ "$sel" -lt 1 ] || [ "$sel" -gt "${#names[@]}" ]; then
-        echo -e "${RED}Geçersiz seçim!${NC}" >&2
-        return 1
+    echo -e "${BLUE}Node servisi durduruluyor...${NC}"
+    sudo systemctl stop worrelld
+
+    echo -e "${BLUE}Validator imzalama durumu yedekleniyor...${NC}"
+    if [ -f "$WORRELL_HOME/data/priv_validator_state.json" ]; then
+        cp "$WORRELL_HOME/data/priv_validator_state.json" "$WORRELL_HOME/priv_validator_state.json.backup"
     fi
-    echo "${names[$((sel-1))]}"
-    return 0
+
+    echo -e "${BLUE}Eski veritabanı temizleniyor...${NC}"
+    rm -rf "$WORRELL_HOME/data"
+
+    echo -e "${BLUE}Snapshot indiriliyor ve açılıyor...${NC}"
+    curl -L "https://server-3.itrocket.net/testnet/worrell/${SNAP_NAME}" | lz4 -dc - | tar -xf - -C "$WORRELL_HOME"
+
+    echo -e "${BLUE}Validator imzalama dosyası geri yükleniyor...${NC}"
+    if [ -f "$WORRELL_HOME/priv_validator_state.json.backup" ]; then
+        mv "$WORRELL_HOME/priv_validator_state.json.backup" "$WORRELL_HOME/data/priv_validator_state.json"
+    fi
+
+    echo -e "${BLUE}Servis yeniden başlatılıyor...${NC}"
+    sudo systemctl restart worrelld
+
+    echo -e "${GREEN}\nSnapshot başarıyla yüklendi ve servis başlatıldı!${NC}"
+    read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
 
-# Kayıtlı tüm cüzdanları (isim + adres) listeler — teşhis / bilgi amaçlı
-list_wallets() {
-    clear
-    print_logo
-    echo -e "${CYAN}Keyring backend: ${WHITE}${KEYRING_BACKEND}${NC}"
-    echo -e "${CYAN}Home dizini    : ${WHITE}${WORRELL_HOME}${NC}"
-    echo -e "${CYAN}Keyring yolu   : ${WHITE}${WORRELL_HOME}/keyring-${KEYRING_BACKEND}${NC}"
-    echo
-
-    if [ ! -f "$HOME/go/bin/worrelld" ]; then
-        echo -e "${RED}HATA: $HOME/go/bin/worrelld bulunamadı! Önce node kurulumu yapılmalı.${NC}"
-        read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
-        return
-    fi
-
-    echo -e "${BLUE}worrelld keys list çıktısı:${NC}"
-    echo
-    $HOME/go/bin/worrelld keys list --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME"
-    local rc=$?
-    echo
-    if [ $rc -ne 0 ]; then
-        echo -e "${RED}Komut hata verdi (exit code: $rc) — yukarıdaki mesaja bakın.${NC}"
-    fi
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
-}
-
-
-# ASCII Art
-print_logo() {
-    echo -e "${CYAN}"
-    echo " __          __                          _ _ "
-    echo " \ \        / /                         | | |"
-    echo "  \ \  /\  / /__  _ __ _ __ ___| | |"
-    echo "   \ \/  \/ / _ \| '__| '__/ _ \ | |"
-    echo "    \  /\  / (_) | |  | | |  __/ | |"
-    echo "     \/  \/ \___/|_|  |_|  \___|_|_|"
-    echo -e "${NC}"
-    echo
-    echo -e "${YELLOW}============================================================${NC}"
-    echo -e "${WHITE}       Worrell Testnet (worrell-testnet-1) Node Manager${NC}"
-    echo -e "${WHITE}                  Repo: Edsny1/Worrel-Testnet${NC}"
-    echo -e "${YELLOW}============================================================${NC}"
-    echo
-}
-
-# Dil seçimi
-select_language() {
-    clear
-    print_logo
-    echo -e "${CYAN}Select Language / Dil Seçin:${NC}"
-    echo -e "${WHITE}1)${NC} English"
-    echo -e "${WHITE}2)${NC} Türkçe"
-    echo
-    read -p "$(echo -e ${YELLOW}"Enter your choice / Seçiminizi yapın [1-2]: "${NC})" lang_choice
-
-    case $lang_choice in
-        1) LANG_SEL="EN" ;;
-        2) LANG_SEL="TR" ;;
-        *) LANG_SEL="EN" ;;
-    esac
-}
-
-# Metin çevirileri
-get_text() {
-    case $1 in
-        "main_menu")
-            [ "$LANG_SEL" = "TR" ] && echo "ANA MENÜ" || echo "MAIN MENU"
-            ;;
-        "install")
-            [ "$LANG_SEL" = "TR" ] && echo "Kurulum Yap" || echo "Install Node"
-            ;;
-        "check_sync")
-            [ "$LANG_SEL" = "TR" ] && echo "Sync Durumu Kontrol Et" || echo "Check Sync Status"
-            ;;
-        "view_logs")
-            [ "$LANG_SEL" = "TR" ] && echo "Logları Görüntüle" || echo "View Logs"
-            ;;
-        "create_wallet")
-            [ "$LANG_SEL" = "TR" ] && echo "Cüzdan Oluştur" || echo "Create Wallet"
-            ;;
-        "import_wallet")
-            [ "$LANG_SEL" = "TR" ] && echo "Cüzdan İçe Aktar" || echo "Import Wallet"
-            ;;
-        "list_wallets")
-            [ "$LANG_SEL" = "TR" ] && echo "Cüzdanları Listele" || echo "List Wallets"
-            ;;
-        "create_validator")
-            [ "$LANG_SEL" = "TR" ] && echo "Validator Oluştur" || echo "Create Validator"
-            ;;
-        "delegate")
-            [ "$LANG_SEL" = "TR" ] && echo "Token Delege Et" || echo "Delegate Tokens"
-            ;;
-        "send_tokens")
-            [ "$LANG_SEL" = "TR" ] && echo "Token Gönder" || echo "Send Tokens"
-            ;;
-        "check_balance")
-            [ "$LANG_SEL" = "TR" ] && echo "Bakiye Kontrol Et" || echo "Check Balance"
-            ;;
-        "request_faucet")
-            [ "$LANG_SEL" = "TR" ] && echo "Faucet'ten Token İste" || echo "Request Faucet Tokens"
-            ;;
-        "state_sync")
-            [ "$LANG_SEL" = "TR" ] && echo "State Sync (Hızlı Senkronizasyon)" || echo "State Sync (Fast Sync)"
-            ;;
-        "node_management")
-            [ "$LANG_SEL" = "TR" ] && echo "Node Yönetimi" || echo "Node Management"
-            ;;
-        "restart_node")
-            [ "$LANG_SEL" = "TR" ] && echo "Node'u Yeniden Başlat" || echo "Restart Node"
-            ;;
-        "stop_node")
-            [ "$LANG_SEL" = "TR" ] && echo "Node'u Durdur" || echo "Stop Node"
-            ;;
-        "start_node")
-            [ "$LANG_SEL" = "TR" ] && echo "Node'u Başlat" || echo "Start Node"
-            ;;
-        "node_status")
-            [ "$LANG_SEL" = "TR" ] && echo "Node Durumu" || echo "Node Status"
-            ;;
-        "delete_node")
-            [ "$LANG_SEL" = "TR" ] && echo "Node'u Sil" || echo "Delete Node"
-            ;;
-        "back")
-            [ "$LANG_SEL" = "TR" ] && echo "Geri" || echo "Back"
-            ;;
-        "exit")
-            [ "$LANG_SEL" = "TR" ] && echo "Çıkış" || echo "Exit"
-            ;;
-        "press_enter")
-            [ "$LANG_SEL" = "TR" ] && echo "Devam etmek için Enter'a basın..." || echo "Press Enter to continue..."
-            ;;
-        "enter_moniker")
-            [ "$LANG_SEL" = "TR" ] && echo "Node isminizi girin (moniker)" || echo "Enter your node name (moniker)"
-            ;;
-        "enter_wallet")
-            [ "$LANG_SEL" = "TR" ] && echo "Cüzdan isminizi girin" || echo "Enter your wallet name"
-            ;;
-        "enter_port")
-            [ "$LANG_SEL" = "TR" ] && echo "Port prefix girin (örn: 10, 26, 45)" || echo "Enter port prefix (e.g: 10, 26, 45)"
-            ;;
-        "installation_complete")
-            [ "$LANG_SEL" = "TR" ] && echo "Kurulum tamamlandı!" || echo "Installation completed!"
-            ;;
-        "go_version_check")
-            [ "$LANG_SEL" = "TR" ] && echo "Go versiyonu kontrol ediliyor..." || echo "Checking Go version..."
-            ;;
-    esac
-}
-
-# Go versiyon kontrolü ve kurulumu
-install_go() {
-    echo -e "${BLUE}$(get_text go_version_check)${NC}"
-
-    if command -v go &> /dev/null; then
-        CURRENT_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
-        echo -e "${YELLOW}Mevcut Go versiyonu: $CURRENT_VERSION${NC}"
-
-        if [ "$(printf '%s\n' "$REQUIRED_GO_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" = "$REQUIRED_GO_VERSION" ]; then
-            echo -e "${GREEN}Go versiyonu uygun. Kurulum atlanıyor (mevcut kurulum korunuyor).${NC}"
-            return
-        else
-            echo -e "${YELLOW}Kurulu Go sürümü gereken minimum sürümün altında, güncelleniyor...${NC}"
-        fi
-    fi
-
-    echo -e "${YELLOW}Go $REQUIRED_GO_VERSION kuruluyor...${NC}"
-
-    rm -rf $HOME/go
-    sudo rm -rf /usr/local/go
-    cd $HOME
-    curl https://dl.google.com/go/go${REQUIRED_GO_VERSION}.linux-amd64.tar.gz | sudo tar -C/usr/local -zxvf -
-
-    if ! grep -q "GOROOT=/usr/local/go" $HOME/.profile 2>/dev/null; then
-        cat <<'EOF' >>$HOME/.profile
-export GOROOT=/usr/local/go
-export GOPATH=$HOME/go
-export GO111MODULE=on
-export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
-EOF
-    fi
-
-    export GOROOT=/usr/local/go
-    export GOPATH=$HOME/go
-    export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
-    echo -e "${GREEN}Go $(go version) kuruldu.${NC}"
-}
-
-# Bağımlılıkları yükle
-install_dependencies() {
-    echo -e "${BLUE}Sistem bağımlılıkları yükleniyor...${NC}"
-    sudo apt update
-    sudo apt-get install git curl build-essential make jq gcc chrony tmux unzip bc -y
-    echo -e "${GREEN}Bağımlılıklar yüklendi.${NC}"
-}
-
-# Cosmovisor kur
-install_cosmovisor() {
-    echo -e "${BLUE}Cosmovisor kuruluyor...${NC}"
-    go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@latest
-    echo -e "${GREEN}Cosmovisor: $($HOME/go/bin/cosmovisor version 2>&1 | tail -n1)${NC}"
-}
-
-# worrelld release binary'sini indir
-download_worrelld() {
-    local arch_raw
-    arch_raw="$(uname -m)"
-    case "$arch_raw" in
-        x86_64|amd64) ARCH="amd64" ;;
-        aarch64|arm64) ARCH="arm64" ;;
-        *) echo -e "${RED}Desteklenmeyen mimari: ${arch_raw}${NC}"; return 1 ;;
-    esac
-
-    echo -e "${BLUE}worrelld ${WORRELL_VERSION} (linux/${ARCH}) binary aranıyor...${NC}"
-    local api_url="https://api.github.com/repos/${WORRELL_REPO}/releases/tags/${WORRELL_VERSION}"
-    local assets_json
-    assets_json="$(curl -fsSL "$api_url")"
-    if [ -z "$assets_json" ]; then
-        echo -e "${RED}GitHub release bilgisi alınamadı!${NC}"
-        return 1
-    fi
-
-    local download_url
-    download_url="$(echo "$assets_json" | jq -r --arg arch "$ARCH" \
-        '.assets[] | select(.name | test("linux"; "i")) | select(.name | test($arch; "i")) | .browser_download_url' \
-        | head -n1)"
-
-    if [ -z "$download_url" ] || [ "$download_url" = "null" ]; then
-        echo -e "${RED}linux/${ARCH} için uygun release dosyası bulunamadı!${NC}"
-        echo -e "${YELLOW}https://github.com/${WORRELL_REPO}/releases/tag/${WORRELL_VERSION} adresini kontrol edin.${NC}"
-        return 1
-    fi
-
-    echo -e "${BLUE}İndiriliyor: ${download_url}${NC}"
-    WORK_DIR=$(mktemp -d)
-    cd "$WORK_DIR"
-    curl -fsSL -o worrelld.tar.gz "$download_url"
-
-    if [ ! -f "worrelld.tar.gz" ]; then
-        echo -e "${RED}Binary indirilemedi! İnternet bağlantınızı kontrol edin.${NC}"
-        cd $HOME; rm -rf "$WORK_DIR"
-        return 1
-    fi
-
-    tar -xzf worrelld.tar.gz 2>/dev/null || cp worrelld.tar.gz worrelld
-    rm -f worrelld.tar.gz
-
-    if find "$WORK_DIR" -name "libwasmvm*.so" 2>/dev/null | grep -q .; then
-        find "$WORK_DIR" -name "libwasmvm*.so" -exec sudo mv {} /usr/lib/ \;
-        echo -e "${GREEN}libwasmvm kütüphanesi kuruldu.${NC}"
-    fi
-
-    WORRELLD_BIN=$(find "$WORK_DIR" -type f -name "worrelld" 2>/dev/null | head -1)
-    if [ -z "$WORRELLD_BIN" ]; then
-        echo -e "${RED}HATA: worrelld binary bulunamadı! Tarball içeriğini kontrol edin.${NC}"
-        ls -la "$WORK_DIR"
-        cd $HOME; rm -rf "$WORK_DIR"
-        return 1
-    fi
-
-    chmod +x "$WORRELLD_BIN"
-    mkdir -p $HOME/go/bin
-    cp "$WORRELLD_BIN" $HOME/go/bin/worrelld
-
-    cd $HOME
-    rm -rf "$WORK_DIR"
-
-    export PATH=$PATH:$HOME/go/bin:/usr/local/go/bin
-    if ! command -v worrelld &> /dev/null; then
-        sudo ln -sf $HOME/go/bin/worrelld /usr/local/bin/worrelld
-    fi
-
-    echo -e "${GREEN}worrelld versiyonu: $($HOME/go/bin/worrelld version --home $WORRELL_HOME 2>/dev/null || echo 'versiyon okunamadı')${NC}"
-    return 0
-}
-
-# Node kurulumu
+# Node Kurulumu
 install_node() {
     clear
     print_logo
 
-    read -p "$(echo -e ${YELLOW}$(get_text enter_moniker)": "${NC})" MONIKER
+    read -p "$(echo -e ${YELLOW}"Node Moniker isminizi girin: "${NC})" MONIKER
+    [ -z "$MONIKER" ] && { echo -e "${RED}Moniker boş olamaz!${NC}"; sleep 2; return; }
 
-    if [ -z "$MONIKER" ]; then
-        echo -e "${RED}Node ismi boş olamaz!${NC}"
-        sleep 2
-        return
-    fi
+    read -p "$(echo -e ${YELLOW}"Port Prefix girin [Varsayılan: 10]: "${NC})" CUSTOM_PORT
+    [ -z "$CUSTOM_PORT" ] && CUSTOM_PORT="10"
 
-    echo
-    read -p "$(echo -e ${YELLOW}$(get_text enter_port)" [varsayılan: 10]: "${NC})" CUSTOM_PORT
-
-    if [ -z "$CUSTOM_PORT" ]; then
-        CUSTOM_PORT="10"
-    fi
-
-    if ! [[ "$CUSTOM_PORT" =~ ^[0-9]{1,2}$ ]]; then
-        echo -e "${RED}Geçersiz port prefix! 1-2 haneli rakam girin. Varsayılan port (10) kullanılacak.${NC}"
-        CUSTOM_PORT="10"
-        sleep 2
-    fi
-
-    echo -e "${GREEN}Seçilen port prefix: $CUSTOM_PORT${NC}"
-    echo -e "${YELLOW}Portlar: RPC ${CUSTOM_PORT}657, P2P ${CUSTOM_PORT}656, API ${CUSTOM_PORT}317, gRPC ${CUSTOM_PORT}090, vb.${NC}"
-    sleep 2
-
-    echo -e "${BLUE}Kurulum başlıyor...${NC}"
+    read -p "$(echo -e ${YELLOW}"Cüzdan isminizi girin [Varsayılan: wallet]: "${NC})" WALLET_NAME
+    [ -z "$WALLET_NAME" ] && WALLET_NAME="wallet"
 
     install_dependencies
     install_go
-    export PATH=$PATH:$HOME/go/bin:/usr/local/go/bin
-
-    if ! download_worrelld; then
-        echo -e "${RED}Kurulum durduruldu (worrelld indirilemedi).${NC}"
-        sleep 3
-        return
-    fi
-
     install_cosmovisor
+    export PATH="$PATH:/usr/local/go/bin:$HOME/go/bin"
 
-    echo -e "${BLUE}Cosmovisor dizin yapısı oluşturuluyor...${NC}"
-    mkdir -p $WORRELL_HOME/cosmovisor/genesis/bin
-    mkdir -p $WORRELL_HOME/cosmovisor/upgrades
-    cp $HOME/go/bin/worrelld $WORRELL_HOME/cosmovisor/genesis/bin/worrelld
+    echo -e "${BLUE}Kaynak kod indiriliyor ve derleniyor (${REPO_VERSION})...${NC}"
+    cd "$HOME"
+    rm -rf worrell
+    git clone "$REPO_URL"
+    cd worrell
+    git checkout "$REPO_VERSION"
+    make install
 
-    if [ ! -f "$WORRELL_HOME/cosmovisor/genesis/bin/worrelld" ]; then
-        echo -e "${RED}HATA: Cosmovisor genesis binary kopyalanamadı!${NC}"
+    BIN_PATH=$(get_binary)
+    if ! command -v "$BIN_PATH" &>/dev/null; then
+        echo -e "${RED}Derleme başarısız! worrelld binary dosyası bulunamadı.${NC}"
         sleep 3
         return
     fi
-    echo -e "${GREEN}Cosmovisor genesis binary doğrulandı: $(ls -lh $WORRELL_HOME/cosmovisor/genesis/bin/worrelld)${NC}"
 
-    echo -e "${BLUE}Node başlatılıyor...${NC}"
-    $HOME/go/bin/worrelld init "$MONIKER" --chain-id="$CHAIN_ID" --home="$WORRELL_HOME"
+    echo -e "${BLUE}Cosmovisor klasör yapısı hazırlanıyor...${NC}"
+    mkdir -p "$WORRELL_HOME/cosmovisor/genesis/bin"
+    mkdir -p "$WORRELL_HOME/cosmovisor/upgrades"
+    cp "$BIN_PATH" "$WORRELL_HOME/cosmovisor/genesis/bin/worrelld"
 
-    echo -e "${BLUE}Genesis indiriliyor...${NC}"
-    curl -fsSL "${NETWORKS_RAW}/genesis.json" -o $WORRELL_HOME/config/genesis.json
+    echo -e "${BLUE}Node yapılandırılıyor...${NC}"
+    "$BIN_PATH" init "$MONIKER" --chain-id "$CHAIN_ID" --home "$WORRELL_HOME"
 
-    DOWNLOADED_SHA=$(sha256sum $WORRELL_HOME/config/genesis.json | awk '{print $1}')
-    if [ "$DOWNLOADED_SHA" != "$GENESIS_SHA256" ]; then
-        echo -e "${RED}HATA: Genesis SHA256 uyuşmuyor!${NC}"
-        echo -e "${RED}Beklenen: $GENESIS_SHA256${NC}"
-        echo -e "${RED}Bulunan : $DOWNLOADED_SHA${NC}"
-        sleep 3
-        return
-    fi
-    echo -e "${GREEN}Genesis checksum doğrulandı.${NC}"
+    # client.toml yapılandırması
+    "$BIN_PATH" config set client chain-id "$CHAIN_ID" --home "$WORRELL_HOME"
+    "$BIN_PATH" config set client node "tcp://localhost:${CUSTOM_PORT}657" --home "$WORRELL_HOME"
 
-    # Bash profiline diğer zincirleri etkilemeyecek şekilde WORRELL prefixiyle yaz
-    sed -i '/WORRELL_PORT/d' $HOME/.bash_profile 2>/dev/null
-    sed -i '/WORRELL_MONIKER/d' $HOME/.bash_profile 2>/dev/null
-    sed -i '/WORRELL_CHAIN_ID/d' $HOME/.bash_profile 2>/dev/null
+    # Genesis ve Addrbook indir
+    echo -e "${BLUE}Genesis ve Addrbook indiriliyor...${NC}"
+    wget -qO "$WORRELL_HOME/config/genesis.json" "$GENESIS_URL"
+    wget -qO "$WORRELL_HOME/config/addrbook.json" "$ADDRBOOK_URL"
 
-    cat <<EOF >> $HOME/.bash_profile
-export WORRELL_MONIKER="$MONIKER"
-export WORRELL_CHAIN_ID="$CHAIN_ID"
-export WORRELL_PORT="$CUSTOM_PORT"
-EOF
+    # Seeds ve Peers ayarla
+    sed -i -e "/^\[p2p\]/,/^\[/{s/^[[:space:]]*seeds *=.*/seeds = \"$SEEDS\"/}" \
+           -e "/^\[p2p\]/,/^\[/{s/^[[:space:]]*persistent_peers *=.*/persistent_peers = \"$PEERS\"/}" "$WORRELL_HOME/config/config.toml"
 
-    echo -e "${BLUE}Konfigürasyonlar ayarlanıyor...${NC}"
+    # app.toml port ayarları
+    sed -i.bak -e "s%:1317%:${CUSTOM_PORT}317%g;
+s%:8080%:${CUSTOM_PORT}080%g;
+s%:9090%:${CUSTOM_PORT}090%g;
+s%:9091%:${CUSTOM_PORT}091%g;
+s%:8545%:${CUSTOM_PORT}545%g;
+s%:8546%:${CUSTOM_PORT}546%g;
+s%:6065%:${CUSTOM_PORT}065%g" "$WORRELL_HOME/config/app.toml"
 
-    # Keyring backend / chain-id / node adresini client.toml içine kalıcı olarak yaz.
-    # Böylece bundan sonraki her worrelld komutu (keys/tx/query) her seferinde
-    # --keyring-backend / --chain-id / --node bayraklarına ihtiyaç duymadan
-    # doğru ayarları kullanır (os keyring'de takılma sorununu da önler).
-    $HOME/go/bin/worrelld config set client keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" >/dev/null 2>&1
-    $HOME/go/bin/worrelld config set client chain-id "$CHAIN_ID" --home "$WORRELL_HOME" >/dev/null 2>&1
-    $HOME/go/bin/worrelld config set client node "tcp://127.0.0.1:${CUSTOM_PORT}657" --home "$WORRELL_HOME" >/dev/null 2>&1
+    # config.toml port ayarları (IPv4 zorlamalı)
+    local ip_addr
+    ip_addr=$(curl -4 -s ifconfig.me || wget -4 -qO- ifconfig.me || echo "127.0.0.1")
+    sed -i.bak -e "s%:26658%:${CUSTOM_PORT}658%g;
+s%:26657%:${CUSTOM_PORT}657%g;
+s%:6060%:${CUSTOM_PORT}060%g;
+s%:26656%:${CUSTOM_PORT}656%g;
+s%^external_address = \"\"%external_address = \"${ip_addr}:${CUSTOM_PORT}656\"%;
+s%:26660%:${CUSTOM_PORT}660%g" "$WORRELL_HOME/config/config.toml"
 
-    # Persistent peer (uzak node'un portuna DOKUNMADAN, olduğu gibi yazılır)
-    sed -i -E "s|^([[:space:]]*persistent_peers[[:space:]]*=).*|\1 \"${PERSISTENT_PEER}\"|" $WORRELL_HOME/config/config.toml
-    sed -i 's|minimum-gas-prices =.*|minimum-gas-prices = "'"${MIN_GAS_PRICE}"'"|g' $WORRELL_HOME/config/app.toml
-    sed -i -e "s/^enable *=.*/enable = true/" $WORRELL_HOME/config/app.toml
+    # Pruning ve Prometheus ayarları
+    sed -i -e "s/^pruning *=.*/pruning = \"custom\"/" "$WORRELL_HOME/config/app.toml"
+    sed -i -e "s/^pruning-keep-recent *=.*/pruning-keep-recent = \"100\"/" "$WORRELL_HOME/config/app.toml"
+    sed -i -e "s/^pruning-interval *=.*/pruning-interval = \"19\"/" "$WORRELL_HOME/config/app.toml"
+    sed -i 's|minimum-gas-prices =.*|minimum-gas-prices = "0.025uworrell"|g' "$WORRELL_HOME/config/app.toml"
+    sed -i -e "s/prometheus = false/prometheus = true/" "$WORRELL_HOME/config/config.toml"
+    sed -i -e "s/^indexer *=.*/indexer = \"null\"/" "$WORRELL_HOME/config/config.toml"
 
-    # -----------------------------------------------------------------------
-    # Port yapılandırması — ÖNEMLİ: sadece SPESİFİK anahtar+host desenlerine
-    # (ör. "laddr = tcp://0.0.0.0:26656") göre değiştiriyoruz, dosyadaki HER
-    # ":26656" geçen yeri (mesela persistent_peers satırındaki UZAK peer'in
-    # portu) değil. Aksi halde uzak peer portu da yanlışlıkla yerel port
-    # prefix'i ile değiştirilir ve peşleşme/handshake başarısız olur.
-    # -----------------------------------------------------------------------
-
-    # app.toml — API / gRPC (bu anahtarlar dosyada tektir, güvenle değiştirilir)
-    sed -i -E "s|^([[:space:]]*address[[:space:]]*=[[:space:]]*\"tcp://0\.0\.0\.0:)1317(\")|\1${CUSTOM_PORT}317\2|" $WORRELL_HOME/config/app.toml
-    sed -i -E "s|^([[:space:]]*address[[:space:]]*=[[:space:]]*\"0\.0\.0\.0:)9090(\")|\1${CUSTOM_PORT}090\2|" $WORRELL_HOME/config/app.toml
-
-    # config.toml — proxy_app (127.0.0.1 host'una anchor'lı, tek satır)
-    sed -i -E "s|^([[:space:]]*proxy_app[[:space:]]*=[[:space:]]*\"tcp://127\.0\.0\.1:)26658(\")|\1${CUSTOM_PORT}658\2|" $WORRELL_HOME/config/config.toml
-    # config.toml — RPC laddr (SADECE 127.0.0.1 host'unda, p2p'nin 0.0.0.0 host'u ile karışmaz)
-    sed -i -E "s|^([[:space:]]*laddr[[:space:]]*=[[:space:]]*\"tcp://127\.0\.0\.1:)26657(\")|\1${CUSTOM_PORT}657\2|" $WORRELL_HOME/config/config.toml
-    # config.toml — pprof
-    sed -i -E "s|^([[:space:]]*pprof_laddr[[:space:]]*=[[:space:]]*\"localhost:)6060(\")|\1${CUSTOM_PORT}060\2|" $WORRELL_HOME/config/config.toml
-    # config.toml — P2P laddr (SADECE 0.0.0.0 host'unda, rpc'nin 127.0.0.1 host'u ile karışmaz)
-    sed -i -E "s|^([[:space:]]*laddr[[:space:]]*=[[:space:]]*\"tcp://0\.0\.0\.0:)26656(\")|\1${CUSTOM_PORT}656\2|" $WORRELL_HOME/config/config.toml
-    # config.toml — external_address (boşsa doldur)
-    sed -i -E "s|^([[:space:]]*external_address[[:space:]]*=[[:space:]]*)\"\"|\1\"$(curl -4 -s ifconfig.me || wget -4 -qO- ifconfig.me):${CUSTOM_PORT}656\"|" $WORRELL_HOME/config/config.toml
-    # config.toml — prometheus
-    sed -i -E "s|^([[:space:]]*prometheus_listen_addr[[:space:]]*=[[:space:]]*\":)26660(\")|\1${CUSTOM_PORT}660\2|" $WORRELL_HOME/config/config.toml
-
-    # Pruning ayarları
-    sed -i -e "s/^pruning *=.*/pruning = \"custom\"/" $WORRELL_HOME/config/app.toml
-    sed -i -e "s/^pruning-keep-recent *=.*/pruning-keep-recent = \"100\"/" $WORRELL_HOME/config/app.toml
-    sed -i -e "s/^pruning-interval *=.*/pruning-interval = \"19\"/" $WORRELL_HOME/config/app.toml
-    sed -i -e "s/prometheus = false/prometheus = true/" $WORRELL_HOME/config/config.toml
-    sed -i -e "s/^indexer *=.*/indexer = \"null\"/" $WORRELL_HOME/config/config.toml
-
-    echo -e "${BLUE}Cosmovisor servisi oluşturuluyor...${NC}"
+    # Systemd servisini Cosmovisor ile kur
+    echo -e "${BLUE}Cosmovisor systemd servisi oluşturuluyor...${NC}"
     sudo tee /etc/systemd/system/worrelld.service > /dev/null <<EOF
 [Unit]
-Description=Worrell Testnet Node with Cosmovisor
+Description=Worrell Testnet Node via Cosmovisor
 After=network-online.target
 
 [Service]
 User=$USER
-ExecStart=$HOME/go/bin/cosmovisor run start --home $WORRELL_HOME
-Restart=always
-RestartSec=3
+WorkingDirectory=$WORRELL_HOME
+ExecStart=$(which cosmovisor) run start --home $WORRELL_HOME
+Restart=on-failure
+RestartSec=5
 LimitNOFILE=65535
 Environment="DAEMON_NAME=worrelld"
 Environment="DAEMON_HOME=$WORRELL_HOME"
@@ -537,558 +278,270 @@ Environment="UNSAFE_SKIP_BACKUP=true"
 WantedBy=multi-user.target
 EOF
 
+    # Çevresel değişkenleri kaydet
+    sed -i '/WORRELL_/d' "$HOME/.bash_profile" 2>/dev/null
+    cat <<EOF >> "$HOME/.bash_profile"
+export WORRELL_PORT="$CUSTOM_PORT"
+export WORRELL_CHAIN_ID="$CHAIN_ID"
+export WORRELL_MONIKER="$MONIKER"
+export WORRELL_WALLET="$WALLET_NAME"
+EOF
+
+    # Kurulum esnasında otomatik snapshot yükle
+    echo -e "${YELLOW}Snapshot yükleniyor...${NC}"
+    local SNAP_NAME
+    SNAP_NAME=$(curl -s https://server-3.itrocket.net/testnet/worrell/ | grep -oE 'worrell_[0-9-]+_[0-9]+_snap\.tar\.lz4' | head -n 1)
+    if [ -n "$SNAP_NAME" ]; then
+        curl -L "https://server-3.itrocket.net/testnet/worrell/${SNAP_NAME}" | lz4 -dc - | tar -xf - -C "$WORRELL_HOME"
+        echo -e "${GREEN}Güncel Snapshot kuruldu: ${SNAP_NAME}${NC}"
+    else
+        echo -e "${YELLOW}Snapshot bulunamadı, genesis'ten senkronizasyon başlayacak.${NC}"
+    fi
+
     sudo systemctl daemon-reload
     sudo systemctl enable worrelld
-
-    echo -e "${BLUE}Node başlatılıyor...${NC}"
     sudo systemctl restart worrelld
 
-    echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}$(get_text installation_complete)${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${CYAN}Node Bilgileri:${NC}"
-    echo -e "${YELLOW}Moniker: ${WHITE}$MONIKER${NC}"
-    echo -e "${YELLOW}Versiyon: ${WHITE}${WORRELL_VERSION}${NC}"
-    echo -e "${YELLOW}Port Prefix: ${WHITE}$CUSTOM_PORT${NC}"
-    echo -e "${YELLOW}Chain ID: ${WHITE}$CHAIN_ID${NC}"
-    echo
-    echo -e "${CYAN}Kullanılan Portlar:${NC}"
-    echo -e "${YELLOW}API: ${WHITE}${CUSTOM_PORT}317${NC}"
-    echo -e "${YELLOW}RPC: ${WHITE}${CUSTOM_PORT}657${NC}"
-    echo -e "${YELLOW}P2P: ${WHITE}${CUSTOM_PORT}656${NC}"
-    echo -e "${YELLOW}gRPC: ${WHITE}${CUSTOM_PORT}090${NC}"
-    echo -e "${YELLOW}Prometheus: ${WHITE}${CUSTOM_PORT}660${NC}"
-    echo
-    echo -e "${CYAN}Yararlı Komutlar:${NC}"
-    echo -e "${YELLOW}Servis Durumu: ${WHITE}sudo systemctl status worrelld${NC}"
-    echo -e "${YELLOW}Logları Görüntüle: ${WHITE}sudo journalctl -u worrelld -f${NC}"
-    echo -e "${YELLOW}Sync Durumu: ${WHITE}worrelld status --home $WORRELL_HOME --node $(get_node_rpc) 2>&1 | jq .SyncInfo${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════${NC}"
-
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+    echo -e "${GREEN}\nCosmovisor tabanlı kurulum tamamlandı ve servis başlatıldı!${NC}"
+    echo -e "${CYAN}RPC Adresi : ${WHITE}http://127.0.0.1:${CUSTOM_PORT}657${NC}"
+    echo -e "${CYAN}Log Takibi : ${WHITE}sudo journalctl -u worrelld -f -o cat${NC}"
+    read -p "$(echo -e ${YELLOW}"Devam etmek için Enter'a basın..."${NC})"
 }
 
-# Sync durumu kontrolü
+# Sync Durumu
 check_sync_status() {
     clear
     print_logo
-    echo -e "${BLUE}Sync Durumu ($CHAIN_ID):${NC}"
-    echo
-    # CometBFT/Tendermint sürümüne göre alan adı "SyncInfo" (eski/PascalCase)
-    # ya da "sync_info" (yeni/snake_case) olabilir; ikisini de deniyoruz.
-    $HOME/go/bin/worrelld status --home "$WORRELL_HOME" --node "$(get_node_rpc)" 2>&1 | jq '.SyncInfo // .sync_info // .result.SyncInfo // .result.sync_info'
-    echo
-    echo -e "${YELLOW}Catching Up / catching_up: false ise sync tamamlanmıştır${NC}"
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+    local BIN_PATH=$(get_binary)
+    local RPC=$(get_node_rpc)
+    echo -e "${BLUE}Sync durumu kontrol ediliyor ($RPC)...${NC}\n"
+    "$BIN_PATH" status --home "$WORRELL_HOME" --node "$RPC" 2>&1 | jq '.SyncInfo // .sync_info'
+    echo -e "\n${YELLOW}catching_up: false ise node tamamen senkronize olmuştur.${NC}"
+    read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
 
-# Logları görüntüle
-view_logs() {
-    clear
-    print_logo
-    echo -e "${BLUE}Logları görüntülemek için CTRL+C ile çıkabilirsiniz${NC}"
-    sleep 2
-    sudo journalctl -u worrelld -f --no-hostname -o cat
-}
-
-# Cüzdan oluştur
+# Cüzdan Oluştur
 create_wallet() {
     clear
     print_logo
-    read -p "$(echo -e ${YELLOW}$(get_text enter_wallet)": "${NC})" WALLET_NAME
+    local BIN_PATH=$(get_binary)
+    read -p "$(echo -e ${YELLOW}"Yeni cüzdan ismi girin [Varsayılan: $(get_saved_wallet)]: "${NC})" WNAME
+    [ -z "$WNAME" ] && WNAME=$(get_saved_wallet)
 
-    if [ -z "$WALLET_NAME" ]; then
-        echo -e "${RED}Cüzdan ismi boş olamaz!${NC}"
-        sleep 2
-        return
-    fi
-
-    $HOME/go/bin/worrelld keys add "$WALLET_NAME" --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME"
-    echo
-    echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}Cüzdan oluşturuldu!${NC}"
-    echo -e "${RED}⚠ UYARI: Mnemonic kelimelerinizi güvenli bir yere kaydedin!${NC}"
-    echo -e "${RED}Bu kelimeleri kaybederseniz cüzdanınıza erişimi kaybedersiniz!${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+    "$BIN_PATH" keys add "$WNAME" --home "$WORRELL_HOME"
+    echo -e "${RED}\nYukarıdaki Mnemonic kelimelerini güvenli bir yere kaydedin!${NC}"
+    read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
 
-# Cüzdan içe aktar
+# Cüzdan İçe Aktar
 import_wallet() {
     clear
     print_logo
-    read -p "$(echo -e ${YELLOW}$(get_text enter_wallet)": "${NC})" WALLET_NAME
+    local BIN_PATH=$(get_binary)
+    read -p "$(echo -e ${YELLOW}"Cüzdan ismi girin [Varsayılan: $(get_saved_wallet)]: "${NC})" WNAME
+    [ -z "$WNAME" ] && WNAME=$(get_saved_wallet)
 
-    if [ -z "$WALLET_NAME" ]; then
-        echo -e "${RED}Cüzdan ismi boş olamaz!${NC}"
-        sleep 2
-        return
-    fi
-
-    $HOME/go/bin/worrelld keys add "$WALLET_NAME" --recover --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME"
-    echo
-    echo -e "${GREEN}Cüzdan içe aktarıldı!${NC}"
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+    "$BIN_PATH" keys add "$WNAME" --recover --home "$WORRELL_HOME"
+    read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
 
-# Faucet'ten token iste
-request_faucet() {
+# Cüzdanları Listele
+list_wallets() {
     clear
     print_logo
-
-    local WALLET_NAME
-    WALLET_NAME=$(select_wallet)
-    if [ -z "$WALLET_NAME" ]; then
-        sleep 3
-        return
-    fi
-
-    ADDRESS=$($HOME/go/bin/worrelld keys show "$WALLET_NAME" -a --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" 2>/dev/null)
-    if [ -z "$ADDRESS" ]; then
-        echo -e "${RED}Adres bulunamadı! ('$WALLET_NAME' cüzdanı için adres çözümlenemedi)${NC}"
-        sleep 2
-        return
-    fi
-
-    echo -e "${CYAN}Cüzdan: ${WHITE}${WALLET_NAME}${NC}"
-    echo -e "${CYAN}Adres : ${WHITE}${ADDRESS}${NC}"
-    read -p "$(echo -e ${YELLOW}"Bu adrese faucet talebi gönderilsin mi? (y/n): "${NC})" confirm
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-        echo -e "${YELLOW}İşlem iptal edildi.${NC}"
-        sleep 2
-        return
-    fi
-
-    echo -e "${BLUE}Faucet'ten talep gönderiliyor: ${ADDRESS}${NC}"
-    curl -s -X POST "$FAUCET_URL" \
-        -H "Content-Type: application/json" \
-        -d "{\"address\":\"${ADDRESS}\"}"
-    echo
-    echo -e "${GREEN}Talep gönderildi. Birkaç saniye sonra bakiyenizi kontrol edin.${NC}"
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+    local BIN_PATH=$(get_binary)
+    echo -e "${BLUE}Kayıtlı Cüzdanlar ($WORRELL_HOME):${NC}\n"
+    "$BIN_PATH" keys list --home "$WORRELL_HOME"
+    echo ""
+    read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
 
-# Validator oluştur (JSON dosyası ile — Cosmos SDK v0.53+ akışı)
-create_validator() {
-    clear
-    print_logo
-
-    local WALLET_NAME
-    WALLET_NAME=$(select_wallet)
-    if [ -z "$WALLET_NAME" ]; then
-        sleep 3
-        return
-    fi
-    echo -e "${CYAN}Kullanılacak cüzdan: ${WHITE}${WALLET_NAME}${NC}"
-    echo
-
-    echo -e "${YELLOW}Validator Detayları ($CHAIN_ID):${NC}"
-    echo
-    read -p "Validator ismi (moniker): " V_MONIKER
-    read -p "Identity (opsiyonel, Keybase ID): " IDENTITY
-    read -p "Website (opsiyonel): " WEBSITE
-    read -p "Security Contact (email): " SECURITY
-    read -p "Details (açıklama): " DETAILS
-    read -p "Stake miktarı (örn: 490000000${DENOM}): " AMOUNT
-    read -p "Commission rate (örn: 0.05): " RATE
-    read -p "Commission max rate (örn: 0.20): " MAX_RATE
-    read -p "Commission max change rate (örn: 0.01): " MAX_CHANGE_RATE
-    read -p "Minimum self delegation (örn: 1000000): " MIN_SELF_DELEGATION
-
-    if [ -z "$V_MONIKER" ] || [ -z "$AMOUNT" ]; then
-        echo -e "${RED}Moniker ve stake miktarı zorunludur!${NC}"
-        sleep 2
-        return
-    fi
-
-    PUBKEY_JSON=$($HOME/go/bin/worrelld tendermint show-validator --home "$WORRELL_HOME" 2>/dev/null)
-    if [ -z "$PUBKEY_JSON" ]; then
-        echo -e "${RED}Pubkey alınamadı! Node kurulu ve init edilmiş mi kontrol edin.${NC}"
-        sleep 2
-        return
-    fi
-
-    cat <<EOF > "$WORRELL_HOME/validator.json"
-{
-  "pubkey": ${PUBKEY_JSON},
-  "amount": "${AMOUNT}",
-  "moniker": "${V_MONIKER}",
-  "identity": "${IDENTITY}",
-  "website": "${WEBSITE}",
-  "security": "${SECURITY}",
-  "details": "${DETAILS}",
-  "commission-rate": "${RATE}",
-  "commission-max-rate": "${MAX_RATE}",
-  "commission-max-change-rate": "${MAX_CHANGE_RATE}",
-  "min-self-delegation": "${MIN_SELF_DELEGATION}"
-}
-EOF
-
-    echo
-    echo -e "${CYAN}Oluşturulan validator.json (${WORRELL_HOME}/validator.json):${NC}"
-    echo -e "${WHITE}$(cat "$WORRELL_HOME/validator.json")${NC}"
-    echo
-    read -p "$(echo -e ${YELLOW}"Bu bilgilerle validator oluşturmak istiyor musunuz? (y/n): "${NC})" confirm
-
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-        echo -e "${YELLOW}İşlem iptal edildi. validator.json diskte bırakıldı, dilerseniz düzenleyip tekrar deneyebilirsiniz.${NC}"
-        sleep 2
-        return
-    fi
-
-    $HOME/go/bin/worrelld tx staking create-validator "$WORRELL_HOME/validator.json" \
-        --from "$WALLET_NAME" \
-        --chain-id "$CHAIN_ID" \
-        --home "$WORRELL_HOME" \
-        --node "$(get_node_rpc)" \
-        --keyring-backend "$KEYRING_BACKEND" \
-        --gas auto \
-        --gas-adjustment 1.5 \
-        --gas-prices "$MIN_GAS_PRICE" \
-        -y
-
-    echo
-    echo -e "${GREEN}Validator oluşturma işlemi gönderildi!${NC}"
-    echo -e "${YELLOW}Explorer'dan validator'ınızı kontrol edebilirsiniz: test.anode.team/worrell${NC}"
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
-}
-
-# Token delege et
-delegate_tokens() {
-    clear
-    print_logo
-
-    local WALLET_NAME
-    WALLET_NAME=$(select_wallet)
-    if [ -z "$WALLET_NAME" ]; then
-        sleep 3
-        return
-    fi
-    echo -e "${CYAN}Kullanılacak cüzdan: ${WHITE}${WALLET_NAME}${NC}"
-    echo
-
-    read -p "Validator adresi: " VALIDATOR_ADDR
-    read -p "Miktar (örn: 1000000${DENOM}): " AMOUNT
-
-    if [ -z "$VALIDATOR_ADDR" ] || [ -z "$AMOUNT" ]; then
-        echo -e "${RED}Validator adresi ve miktar zorunludur!${NC}"
-        sleep 2
-        return
-    fi
-
-    echo
-    echo -e "${CYAN}Özet:${NC} ${WALLET_NAME} → ${VALIDATOR_ADDR} : ${AMOUNT}"
-    read -p "$(echo -e ${YELLOW}"Delegasyon işlemi gönderilsin mi? (y/n): "${NC})" confirm
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-        echo -e "${YELLOW}İşlem iptal edildi.${NC}"
-        sleep 2
-        return
-    fi
-
-    $HOME/go/bin/worrelld tx staking delegate "$VALIDATOR_ADDR" "$AMOUNT" \
-        --from "$WALLET_NAME" \
-        --chain-id "$CHAIN_ID" \
-        --home "$WORRELL_HOME" \
-        --node "$(get_node_rpc)" \
-        --keyring-backend "$KEYRING_BACKEND" \
-        --gas auto \
-        --gas-adjustment 1.4 \
-        --gas-prices "$MIN_GAS_PRICE" \
-        -y
-
-    echo
-    echo -e "${GREEN}Delegasyon işlemi gönderildi!${NC}"
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
-}
-
-# Token gönder
-send_tokens() {
-    clear
-    print_logo
-
-    local WALLET_NAME
-    WALLET_NAME=$(select_wallet)
-    if [ -z "$WALLET_NAME" ]; then
-        sleep 3
-        return
-    fi
-    echo -e "${CYAN}Gönderen cüzdan: ${WHITE}${WALLET_NAME}${NC}"
-    echo
-
-    read -p "Alıcı adres: " TO_ADDRESS
-    read -p "Miktar (örn: 1000000${DENOM}): " AMOUNT
-
-    if [ -z "$TO_ADDRESS" ] || [ -z "$AMOUNT" ]; then
-        echo -e "${RED}Alıcı adres ve miktar zorunludur!${NC}"
-        sleep 2
-        return
-    fi
-
-    echo
-    echo -e "${CYAN}Özet:${NC} ${WALLET_NAME} → ${TO_ADDRESS} : ${AMOUNT}"
-    read -p "$(echo -e ${YELLOW}"Transfer gönderilsin mi? (y/n): "${NC})" confirm
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-        echo -e "${YELLOW}İşlem iptal edildi.${NC}"
-        sleep 2
-        return
-    fi
-
-    $HOME/go/bin/worrelld tx bank send "$WALLET_NAME" "$TO_ADDRESS" "$AMOUNT" \
-        --chain-id "$CHAIN_ID" \
-        --home "$WORRELL_HOME" \
-        --node "$(get_node_rpc)" \
-        --keyring-backend "$KEYRING_BACKEND" \
-        --gas auto \
-        --gas-adjustment 1.4 \
-        --gas-prices "$MIN_GAS_PRICE" \
-        -y
-
-    echo
-    echo -e "${GREEN}Transfer işlemi gönderildi!${NC}"
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
-}
-
-# Bakiye kontrol et
+# Bakiye Sorgulama
 check_balance() {
     clear
     print_logo
+    local BIN_PATH=$(get_binary)
+    local RPC=$(get_node_rpc)
+    read -p "$(echo -e ${YELLOW}"Cüzdan ismi veya worrell adresi: "${NC})" WINPUT
+    [ -z "$WINPUT" ] && WINPUT=$(get_saved_wallet)
 
-    read -p "Cüzdan ismi veya adres (boş bırakırsanız kayıtlı cüzdan otomatik seçilir): " WALLET_INPUT
-
-    local TARGET_ADDR
-    if [[ "$WALLET_INPUT" =~ ^worrell ]]; then
-        TARGET_ADDR="$WALLET_INPUT"
-    elif [ -n "$WALLET_INPUT" ]; then
-        TARGET_ADDR=$($HOME/go/bin/worrelld keys show "$WALLET_INPUT" -a --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" 2>/dev/null)
-    else
-        local auto_wallet
-        auto_wallet=$(select_wallet)
-        if [ -n "$auto_wallet" ]; then
-            TARGET_ADDR=$($HOME/go/bin/worrelld keys show "$auto_wallet" -a --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" 2>/dev/null)
-        fi
+    local ADDR="$WINPUT"
+    if ! [[ "$WINPUT" =~ ^worrell ]]; then
+        ADDR=$("$BIN_PATH" keys show "$WINPUT" -a --home "$WORRELL_HOME" 2>/dev/null)
     fi
 
-    echo -e "${BLUE}Bakiye sorgulanıyor ($CHAIN_ID)...${NC}"
-    if [ -z "$TARGET_ADDR" ]; then
-        echo -e "${RED}Adres tespit edilemedi!${NC}"
+    if [ -z "$ADDR" ]; then
+        echo -e "${RED}Cüzdan adresi tespit edilemedi!${NC}"
     else
-        # NOT: query komutları --chain-id bayrağını KABUL ETMEZ (bu sadece
-        # imzalama gerektiren tx komutlarında kullanılır); node zaten RPC
-        # üzerinden doğru zincire bağlı.
-        $HOME/go/bin/worrelld query bank balances "$TARGET_ADDR" --home "$WORRELL_HOME" --node "$(get_node_rpc)"
+        echo -e "${CYAN}Adres: ${WHITE}$ADDR${NC}"
+        "$BIN_PATH" query bank balances "$ADDR" --home "$WORRELL_HOME" --node "$RPC"
     fi
-
-    echo
-    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+    read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
 }
 
-# State Sync (hızlı senkronizasyon; resmi snapshot servisi olmadığı için)
-state_sync_menu() {
+# Faucet İsteği
+request_faucet() {
+    clear
+    print_logo
+    local BIN_PATH=$(get_binary)
+    read -p "$(echo -e ${YELLOW}"Cüzdan ismi veya worrell adresi [Varsayılan: $(get_saved_wallet)]: "${NC})" WINPUT
+    [ -z "$WINPUT" ] && WINPUT=$(get_saved_wallet)
+
+    local ADDR="$WINPUT"
+    if ! [[ "$WINPUT" =~ ^worrell ]]; then
+        ADDR=$("$BIN_PATH" keys show "$WINPUT" -a --home "$WORRELL_HOME" 2>/dev/null)
+    fi
+
+    if [ -z "$ADDR" ]; then
+        echo -e "${RED}Cüzdan adresi tespit edilemedi!${NC}"
+        sleep 2
+        return
+    fi
+
+    echo -e "${CYAN}Hedef Adres : ${WHITE}$ADDR${NC}"
+    echo -e "${BLUE}Faucet talebi gönderiliyor ($FAUCET_URL)...${NC}\n"
+    
+    local RESPONSE
+    RESPONSE=$(curl -s -X POST "$FAUCET_URL" \
+        -H "Content-Type: application/json" \
+        -d "{\"address\":\"$ADDR\"}")
+
+    echo -e "${GREEN}Yanıt:${NC} $RESPONSE\n"
+    echo -e "${YELLOW}Not: Faucet saatte bir talep edilebilir (500 WORRELL).${NC}"
+    read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
+}
+
+# Validator Oluşturma
+create_validator() {
+    clear
+    print_logo
+    local BIN_PATH=$(get_binary)
+    local RPC=$(get_node_rpc)
+
+    read -p "Cüzdan ismi [Varsayılan: $(get_saved_wallet)]: " WNAME
+    [ -z "$WNAME" ] && WNAME=$(get_saved_wallet)
+
+    read -p "Moniker (Validator Adı): " MONIKER
+    read -p "Stake Miktarı (örn: 490000000uworrell): " AMOUNT
+    read -p "Identity (Opsiyonel Keybase): " IDENTITY
+    read -p "Website (Opsiyonel): " WEBSITE
+    read -p "Details (Açıklama): " DETAILS
+
+    [ -z "$MONIKER" ] || [ -z "$AMOUNT" ] && { echo -e "${RED}Moniker ve miktar zorunludur!${NC}"; sleep 2; return; }
+
+    local PUBKEY
+    PUBKEY=$("$BIN_PATH" tendermint show-validator --home "$WORRELL_HOME")
+
+    cat <<EOF > "$WORRELL_HOME/validator.json"
+{
+  "pubkey": ${PUBKEY},
+  "amount": "${AMOUNT}",
+  "moniker": "${MONIKER}",
+  "identity": "${IDENTITY}",
+  "website": "${WEBSITE}",
+  "security": "",
+  "details": "${DETAILS}",
+  "commission-rate": "0.05",
+  "commission-max-rate": "0.20",
+  "commission-max-change-rate": "0.01",
+  "min-self-delegation": "1000000"
+}
+EOF
+
+    echo -e "\n${CYAN}Oluşturulan validator.json:${NC}"
+    cat "$WORRELL_HOME/validator.json"
+    echo ""
+    read -p "$(echo -e ${YELLOW}"Validator oluşturulsun mu? (y/n): "${NC})" CONFIRM
+    if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
+        "$BIN_PATH" tx staking create-validator "$WORRELL_HOME/validator.json" \
+            --from "$WNAME" \
+            --chain-id "$CHAIN_ID" \
+            --home "$WORRELL_HOME" \
+            --node "$RPC" \
+            --gas auto \
+            --gas-adjustment 1.5 \
+            --gas-prices "$MIN_GAS_PRICE" \
+            -y
+    fi
+    read -p "$(echo -e ${CYAN}"Devam etmek için Enter'a basın..."${NC})"
+}
+
+# Node Yönetimi
+node_management() {
     while true; do
         clear
         print_logo
-        echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${NC}   $(get_text state_sync)          ${CYAN}║${NC}"
-        echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
-        echo
-        echo -e "${YELLOW}State Sync, node'un genesis'ten başlamak yerine yakın${NC}"
-        echo -e "${YELLOW}zamanlı güvenilir bir state'ten senkronize olmasını sağlar.${NC}"
-        echo
-        echo -e "${WHITE}1)${NC} State Sync'i Etkinleştir ve Başlat"
-        echo -e "${WHITE}2)${NC} State Sync'i Kapat (senkron tamamlandıktan sonra)"
-        echo -e "${WHITE}0)${NC} $(get_text back)"
-        echo
-        read -p "$(echo -e ${YELLOW}"Seçiminiz: "${NC})" ss_choice
-
-        case $ss_choice in
-            1)
-                echo -e "${RED}⚠ Bu işlem node'un mevcut state verisini sıfırlayacaktır (priv_validator_state.json korunur).${NC}"
-                read -p "$(echo -e ${YELLOW}"Devam edilsin mi? (y/n): "${NC})" ss_confirm
-                if [ "$ss_confirm" != "y" ] && [ "$ss_confirm" != "Y" ]; then
-                    echo -e "${YELLOW}İptal edildi.${NC}"
-                    sleep 2
-                    continue
-                fi
-
-                echo -e "${BLUE}Node durduruluyor...${NC}"
-                sudo systemctl stop worrelld
-
-                echo -e "${BLUE}Eski state verileri temizleniyor (addrbook korunuyor)...${NC}"
-                $HOME/go/bin/worrelld tendermint unsafe-reset-all --home "$WORRELL_HOME" --keep-addr-book
-
-                echo -e "${BLUE}Güvenilir blok bilgisi alınıyor...${NC}"
-                LATEST_HEIGHT=$(curl -s "$STATESYNC_RPC/block" | jq -r .result.block.header.height)
-                if [ -z "$LATEST_HEIGHT" ] || [ "$LATEST_HEIGHT" = "null" ]; then
-                    echo -e "${RED}RPC'den blok yüksekliği alınamadı! ${STATESYNC_RPC} erişilebilir mi kontrol edin.${NC}"
-                    sleep 3
-                    continue
-                fi
-                BLOCK_HEIGHT=$((LATEST_HEIGHT - 2000))
-                TRUST_HASH=$(curl -s "$STATESYNC_RPC/block?height=$BLOCK_HEIGHT" | jq -r .result.block_id.hash)
-
-                echo -e "${GREEN}Hedef Blok: $BLOCK_HEIGHT${NC}"
-                echo -e "${GREEN}Hedef Hash: $TRUST_HASH${NC}"
-
-                sed -i -E "s|^([[:space:]]*enable[[:space:]]*=).*|\1 true|" "$WORRELL_HOME/config/config.toml"
-                sed -i -E "s|^([[:space:]]*rpc_servers[[:space:]]*=).*|\1 \"${STATESYNC_RPC},${STATESYNC_RPC}\"|" "$WORRELL_HOME/config/config.toml"
-                sed -i -E "s|^([[:space:]]*trust_height[[:space:]]*=).*|\1 $BLOCK_HEIGHT|" "$WORRELL_HOME/config/config.toml"
-                sed -i -E "s|^([[:space:]]*trust_hash[[:space:]]*=).*|\1 \"$TRUST_HASH\"|" "$WORRELL_HOME/config/config.toml"
-
-                echo -e "${BLUE}Servis yeniden başlatılıyor...${NC}"
-                sudo systemctl restart worrelld
-                echo -e "${GREEN}State sync başlatıldı. Logları izlemek için: sudo journalctl -u worrelld -f -o cat${NC}"
-                read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
-                ;;
-            2)
-                sed -i -E "s|^([[:space:]]*enable[[:space:]]*=).*|\1 false|" "$WORRELL_HOME/config/config.toml"
-                sudo systemctl restart worrelld
-                echo -e "${GREEN}State sync kapatıldı ve node yeniden başlatıldı.${NC}"
-                sleep 2
-                ;;
-            0)
-                return
-                ;;
-            *)
-                echo -e "${RED}Geçersiz seçim!${NC}"
-                sleep 2
-                ;;
-        esac
-    done
-}
-
-# Node yönetimi menüsü
-node_management_menu() {
-    while true; do
-        clear
-        print_logo
-        echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${NC}     $(get_text node_management)           ${CYAN}║${NC}"
-        echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
-        echo
-        echo -e "${WHITE}1)${NC}  $(get_text node_status)"
-        echo -e "${WHITE}2)${NC}  $(get_text restart_node)"
-        echo -e "${WHITE}3)${NC}  $(get_text stop_node)"
-        echo -e "${WHITE}4)${NC}  $(get_text start_node)"
-        echo -e "${WHITE}5)${NC}  $(get_text delete_node)"
-        echo -e "${WHITE}0)${NC}  $(get_text back)"
-        echo
-        read -p "$(echo -e ${YELLOW}"Seçiminiz / Your choice: "${NC})" choice
-
-        case $choice in
-            1)
-                clear
-                print_logo
-                sudo systemctl status worrelld
-                echo
-                read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
-                ;;
-            2)
-                echo -e "${BLUE}Node yeniden başlatılıyor...${NC}"
-                sudo systemctl restart worrelld
-                echo -e "${GREEN}Node yeniden başlatıldı!${NC}"
-                sleep 2
-                ;;
-            3)
-                echo -e "${BLUE}Node durduruluyor...${NC}"
-                sudo systemctl stop worrelld
-                echo -e "${GREEN}Node durduruldu!${NC}"
-                sleep 2
-                ;;
-            4)
-                echo -e "${BLUE}Node başlatılıyor...${NC}"
-                sudo systemctl start worrelld
-                echo -e "${GREEN}Node başlatıldı!${NC}"
-                sleep 2
-                ;;
+        echo -e "${WHITE}1)${NC} Servisi Yeniden Başlat (Restart)"
+        echo -e "${WHITE}2)${NC} Servisi Durdur (Stop)"
+        echo -e "${WHITE}3)${NC} Servisi Başlat (Start)"
+        echo -e "${WHITE}4)${NC} Servis Durumunu Gör (Status)"
+        echo -e "${WHITE}5)${NC} ${RED}Node'u Tamamen Sil (Uninstall)${NC}"
+        echo -e "${WHITE}0)${NC} Geri Dön"
+        echo ""
+        read -p "$(echo -e ${YELLOW}"Seçiminiz: "${NC})" opt
+        case $opt in
+            1) sudo systemctl restart worrelld && echo -e "${GREEN}Yeniden başlatıldı.${NC}"; sleep 2 ;;
+            2) sudo systemctl stop worrelld && echo -e "${GREEN}Durduruldu.${NC}"; sleep 2 ;;
+            3) sudo systemctl start worrelld && echo -e "${GREEN}Başlatıldı.${NC}"; sleep 2 ;;
+            4) sudo systemctl status worrelld; read -p "Devam etmek için Enter..." ;;
             5)
-                clear
-                print_logo
-                echo -e "${RED}⚠ UYARI: Bu işlem node'unuzu tamamen silecektir!${NC}"
-                echo -e "${RED}Cüzdan bilgilerinizi yedeklediğinizden emin olun!${NC}"
-                echo
-                read -p "$(echo -e ${YELLOW}"Devam etmek istiyor musunuz? (y/n): "${NC})" confirm
-                if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-                    echo -e "${BLUE}Node siliniyor...${NC}"
+                read -p "$(echo -e ${RED}"Node ve veritabanı tamamen silinsin mi? (y/n): "${NC})" del_confirm
+                if [ "$del_confirm" = "y" ] || [ "$del_confirm" = "Y" ]; then
                     sudo systemctl stop worrelld
                     sudo systemctl disable worrelld
-                    sudo rm -f /etc/systemd/system/worrelld.service
+                    sudo rm -rf /etc/systemd/system/worrelld.service
                     sudo systemctl daemon-reload
+                    local BIN_PATH=$(get_binary)
+                    [ -f "$BIN_PATH" ] && sudo rm -f "$BIN_PATH"
                     rm -rf "$WORRELL_HOME"
-                    rm -f $HOME/go/bin/worrelld
-                    sudo rm -f /usr/local/bin/worrelld
-                    sed -i '/WORRELL_/d' $HOME/.bash_profile 2>/dev/null
-                    echo -e "${GREEN}Node tamamen silindi!${NC}"
-                    echo -e "${YELLOW}Not: Go ve Cosmovisor kurulumu (sunucudaki diğer node'lar için) korundu.${NC}"
-                    sleep 3
-                    return
-                else
-                    echo -e "${YELLOW}İşlem iptal edildi.${NC}"
+                    rm -rf "$HOME/worrell"
+                    sed -i '/WORRELL_/d' "$HOME/.bash_profile" 2>/dev/null
+                    echo -e "${GREEN}Node tamamen temizlendi.${NC}"
                     sleep 2
+                    return
                 fi
                 ;;
-            0)
-                return
-                ;;
-            *)
-                echo -e "${RED}Geçersiz seçim!${NC}"
-                sleep 2
-                ;;
+            0) return ;;
         esac
     done
 }
 
-# Ana menü
+# Ana Menü
 main_menu() {
     while true; do
         clear
         print_logo
-        echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${NC}           $(get_text main_menu)                  ${CYAN}║${NC}"
-        echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
-        echo
-        echo -e "${WHITE}1)${NC}  $(get_text install)"
-        echo -e "${WHITE}2)${NC}  $(get_text check_sync)"
-        echo -e "${WHITE}3)${NC}  $(get_text view_logs)"
-        echo -e "${WHITE}4)${NC}  $(get_text create_wallet)"
-        echo -e "${WHITE}5)${NC}  $(get_text import_wallet)"
-        echo -e "${WHITE}6)${NC}  $(get_text list_wallets)"
-        echo -e "${WHITE}7)${NC}  $(get_text create_validator)"
-        echo -e "${WHITE}8)${NC}  $(get_text delegate)"
-        echo -e "${WHITE}9)${NC}  $(get_text send_tokens)"
-        echo -e "${WHITE}10)${NC} $(get_text check_balance)"
-        echo -e "${WHITE}11)${NC} $(get_text request_faucet)"
-        echo -e "${WHITE}12)${NC} $(get_text state_sync)"
-        echo -e "${WHITE}13)${NC} $(get_text node_management)"
-        echo -e "${WHITE}0)${NC}  $(get_text exit)"
-        echo
-        read -p "$(echo -e ${YELLOW}"Seçiminiz / Your choice: "${NC})" choice
+        echo -e "${WHITE}1)${NC} Node Kurulumu Yap (Cosmovisor Install)"
+        echo -e "${WHITE}2)${NC} Sync Durumunu Kontrol Et (Sync Status)"
+        echo -e "${WHITE}3)${NC} Logları Takip Et (View Logs)"
+        echo -e "${WHITE}4)${NC} Güncel Snapshot Yükle (Download Snapshot)"
+        echo -e "${WHITE}5)${NC} Yeni Cüzdan Oluştur (Create Wallet)"
+        echo -e "${WHITE}6)${NC} Cüzdan İçe Aktar (Import Wallet)"
+        echo -e "${WHITE}7)${NC} Kayıtlı Cüzdanları Listele (List Wallets)"
+        echo -e "${WHITE}8)${NC} Bakiye Sorgula (Check Balance)"
+        echo -e "${WHITE}9)${NC} Faucet'ten Token İste (Request Faucet)"
+        echo -e "${WHITE}10)${NC} Validator Oluştur (Create Validator)"
+        echo -e "${WHITE}11)${NC} Node Servis Yönetimi (Start/Stop/Delete)"
+        echo -e "${WHITE}0)${NC} Çıkış"
+        echo ""
+        read -p "$(echo -e ${YELLOW}"Seçiminiz [0-11]: "${NC})" choice
 
         case $choice in
             1) install_node ;;
             2) check_sync_status ;;
-            3) view_logs ;;
-            4) create_wallet ;;
-            5) import_wallet ;;
-            6) list_wallets ;;
-            7) create_validator ;;
-            8) delegate_tokens ;;
-            9) send_tokens ;;
-            10) check_balance ;;
-            11) request_faucet ;;
-            12) state_sync_menu ;;
-            13) node_management_menu ;;
-            0)
-                echo -e "${GREEN}Çıkılıyor... / Exiting...${NC}"
-                exit 0
-                ;;
-            *)
-                echo -e "${RED}Geçersiz seçim! / Invalid choice!${NC}"
-                sleep 2
-                ;;
+            3) sudo journalctl -u worrelld -f -o cat ;;
+            4) apply_snapshot ;;
+            5) create_wallet ;;
+            6) import_wallet ;;
+            7) list_wallets ;;
+            8) check_balance ;;
+            9) request_faucet ;;
+            10) create_validator ;;
+            11) node_management ;;
+            0) echo -e "${GREEN}Çıkış yapıldı.${NC}"; exit 0 ;;
+            *) echo -e "${RED}Geçersiz seçim!${NC}"; sleep 2 ;;
         esac
     done
 }
 
-# Script başlangıcı
-select_language
 main_menu
