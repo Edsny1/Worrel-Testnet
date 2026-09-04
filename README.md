@@ -1,169 +1,152 @@
-# worrell-testnet-1 — Node Manager Kurulum Rehberi
+# Worrell Testnet (`worrell-testnet-1`) — Node Manager Guide
 
-Bu script, **worrell-testnet-1** ağına Cosmovisor ile bağlanan bir node
-kurmak ve yönetmek için tamamen **interaktif bir menü** sunar: script'i
-çalıştırdığınızda moniker'ınızı ve port prefix'inizi sorar, ardından
-cüzdan/validator/node yönetimi işlemlerini menüden yapabilirsiniz.
+An interactive CLI manager to deploy, synchronize, and operate a validator node on the **`worrell-testnet-1`** network using Cosmovisor.
 
-| Alan | Değer |
-|---|---|
+The script automates Go, Cosmovisor, and binary source compilation, configures customized port prefixes to avoid conflicts on multi-node servers, enforces IPv4 networking, downloads snapshots, and provides wallet/validator management directly using wallet addresses.
+
+| Parameter | Value |
+| --- | --- |
 | Chain ID | `worrell-testnet-1` |
 | Binary | `worrelld` (Cosmos SDK v0.53.6) |
-| Kaynak | [worrellchain/worrell](https://github.com/worrellchain/worrell) @ `v0.1.2` |
-| Genesis | [worrell-testnet-1/genesis.json](https://github.com/worrellchain/networks/blob/main/worrell-testnet-1/genesis.json) |
-| Genesis sha256 | `a81c507b12ba0678c3172394ff4bb03e1c3db60050cc5568c127a24ec19378fd` |
-| Persistent peer | `bb9164c1bd9ed9ff2c0fd9e09b23285698e231de@164.68.98.186:26656` |
-| Min gas price | `0.025uworrell` |
-| Faucet | `POST http://164.68.98.186:4500` → `{"address":"worrell1..."}` (500 WORRELL) |
+| Source | [worrellchain/worrell](https://github.com/worrellchain/worrell) @ `v0.1.2` |
+| Genesis | [server-3.itrocket.net/.../genesis.json](https://server-3.itrocket.net/testnet/worrell/genesis.json) |
+| Addrbook | [server-3.itrocket.net/.../addrbook.json](https://server-3.itrocket.net/testnet/worrell/addrbook.json) |
+| Min Gas Price | `0.025uworrell` |
+| Faucet | `POST [http://164.68.98.186:4500](http://164.68.98.186:4500)` → `{"address":"worrell1..."}` (500 WORRELL / hour) |
 
 ---
 
-## Kullanım
+## Quick Start
+
+Run the manager using git clone:
 
 ```bash
 git clone https://github.com/Edsny1/Worrel-Testnet.git && cd Worrel-Testnet && chmod +x worrell-node-manager.sh && ./worrell-node-manager.sh
-```
-
-Script açıldığında sırasıyla:
-
-1. **Dil seçimi** (English / Türkçe)
-2. **Ana menü** görüntülenir
 
 ```
-1)  Kurulum Yap
-2)  Sync Durumu Kontrol Et
-3)  Logları Görüntüle
-4)  Cüzdan Oluştur
-5)  Cüzdan İçe Aktar
-6)  Validator Oluştur
-7)  Token Delege Et
-8)  Token Gönder
-9)  Bakiye Kontrol Et
-10) Faucet'ten Token İste
-11) Node Yönetimi
-0)  Çıkış
-```
 
-### 1) Kurulum Yap
+Or execute directly via one-liner:
 
-Bu seçenek sırayla:
-
-- **Moniker sorar** (node isminiz)
-- **Port prefix sorar** — örn. `10`, `26`, `45` gibi 1-2 haneli bir sayı
-  (boş bırakırsanız varsayılan `10` kullanılır). Bu prefix tüm servis
-  portlarının başına eklenir, böylece aynı sunucuda birden fazla node
-  çalıştırdığınızda port çakışması yaşamazsınız:
-
-  | Servis | Sabit sonek | Örnek (prefix=10) |
-  |---|---|---|
-  | RPC | `657` | `10657` |
-  | P2P | `656` | `10656` |
-  | ABCI (proxy_app) | `658` | `10658` |
-  | pprof | `060` | `10060` |
-  | Prometheus | `660` | `10660` |
-  | REST API | `317` | `10317` |
-  | gRPC | `090` | `10090` |
-
-- Ardından otomatik olarak:
-  1. Gerekli paketleri kurar (`curl`, `jq`, `tar`, `build-essential`, vb.)
-  2. **Go zaten kuruluysa ve sürümü yeterliyse dokunmaz** (sunucunuzda
-     başka Cosmos node'ları çalışıyorsa güvenlidir); yalnızca eksikse
-     veya sürüm yetersizse kurar/günceller.
-  3. GitHub Releases'ten sisteminize uygun `worrelld` (`v0.1.2`,
-     linux/amd64 veya linux/arm64) binary'sini indirir.
-  4. Cosmovisor'ü kurar (chain-agnostic bir araç olduğundan sunucudaki
-     diğer node'larla paylaşılabilir).
-  5. Cosmovisor dizin yapısını (`~/.worrell/cosmovisor/genesis/bin/...`)
-     oluşturur.
-  6. `worrelld init` çalıştırır, resmi `genesis.json`'ı indirir ve
-     **sha256 checksum'ını doğrular**.
-  7. `persistent_peers`, `minimum-gas-prices`, pruning ayarlarını ve
-     seçtiğiniz **tüm portları** yapılandırır.
-  8. `worrelld.service` adında bir systemd servisi oluşturur, etkinleştirir
-     ve node'u başlatır.
-
-Kurulum bilgileri (moniker, port prefix) `~/.bash_profile` içine
-`WORRELL_MONIKER`, `WORRELL_PORT` gibi değişkenler olarak kaydedilir; bu
-sayede script'i tekrar açtığınızda diğer menü seçenekleri de bu bilgileri
-kullanabilir.
-
-### 2) Sync Durumu Kontrol Et
+```bash
+bash <(curl -s https://raw.githubusercontent.com/Edsny1/Worrel-Testnet/main/worrell-node-manager.sh)
 
 ```
-worrelld status 2>&1 | jq .SyncInfo
-```
-`catching_up: false` ise senkronizasyon tamamlanmış demektir.
 
-### 3) Logları Görüntüle
+---
 
-```
-sudo journalctl -u worrelld -f --no-hostname -o cat
-```
+## Menu Interface
 
-### 4-5) Cüzdan Oluştur / İçe Aktar
-
-`worrelld keys add <isim>` veya `worrelld keys add <isim> --recover`
-çalıştırır. **Mnemonic kelimelerinizi güvenli bir yerde saklayın.**
-
-### 6-8) Validator Oluştur / Delege Et / Token Gönder
-
-Standart `worrelld tx staking create-validator`, `tx staking delegate`,
-`tx bank send` komutlarını, girdiğiniz parametrelerle ve
-`worrell-testnet-1` chain-id / `uworrell` denomu ile çalıştırır.
-
-### 9) Bakiye Kontrol Et
+```text
+1)  Install Node (Cosmovisor Setup)
+2)  Check Sync Status
+3)  View Logs
+4)  Download Snapshot
+5)  Create Wallet
+6)  Import Wallet
+7)  List Wallets
+8)  Check Balance
+9)  Request Faucet Tokens
+10) Create Validator
+11) Node Service Management (Start/Stop/Delete)
+0)  Exit
 
 ```
-worrelld query bank balances <cüzdan-veya-adres>
+
+---
+
+## Features & Usage
+
+### 1) Install Node (Cosmovisor Setup)
+
+* Prompts for a custom **Moniker** and a 1–2 digit **Port Prefix** (default: `10`).
+* Verifies system dependencies and Go environment (requires Go `1.23.5+`).
+* Installs `cosmovisor` and sets up the `$HOME/.worrell/cosmovisor/genesis/bin` directory layout.
+* Clones and builds `worrellchain/worrell` from source at `v0.1.2`.
+* Downloads official Genesis and Addrbook files from ITRocket.
+* Offsets all default ports with your port prefix to run multiple nodes on a single host.
+* Detects your public IPv4 address to configure `external_address`, preventing CometBFT IPv6 parsing crashes.
+* Automatically downloads and unpacks the latest available `.tar.lz4` snapshot.
+* Generates, enables, and starts the `worrelld.service` systemd unit under Cosmovisor.
+
+**Port Allocation Table (Example Prefix: `10`)**
+
+| Service | Default Port | Configured Port |
+| --- | --- | --- |
+| RPC | `26657` | `10657` |
+| P2P | `26656` | `10656` |
+| REST API | `1317` | `10317` |
+| gRPC | `9090` | `10090` |
+| Prometheus | `26660` | `10660` |
+
+### 2) Check Sync Status
+
+Queries the local node status via JSON-RPC:
+
+```bash
+worrelld status --home $HOME/.worrell --node tcp://127.0.0.1:<PORT>657 2>&1 | jq '.SyncInfo // .sync_info'
+
 ```
 
-### 10) Faucet'ten Token İste
+When `catching_up` returns `false`, your node is fully synced with the network.
 
-Belirttiğiniz cüzdanın adresini `worrelld keys show` ile çözüp, faucet'e
-otomatik POST isteği gönderir:
+### 3) View Logs
 
-```
-curl -X POST http://164.68.98.186:4500 \
-  -H "Content-Type: application/json" \
-  -d '{"address":"worrell1..."}'
-```
+Streams live service logs:
+
+```bash
+sudo journalctl -u worrelld -f -o cat
 
 ```
-# Değişkenleri kendi bilgilerinize göre düzenleyin
-MONIKER="YOUR_MONIKER"
-IDENTITY="YOUR_KEYBASE_ID"
-WEBSITE="https://yourwebsite.com"
-SECURITY_CONTACT="your-email@example.com"
-DETAILS="Your node description"
-AMOUNT="490000000uworrell"
 
-# JSON dosyasını oluştur
-cat <<EOF > $HOME/.worrell/validator.json
+### 4) Download Snapshot
+
+Stops the node, creates a backup of `$HOME/.worrell/data/priv_validator_state.json` to prevent double-signing, wipes outdated data, downloads the latest available ITRocket snapshot, restores your validator state file, and restarts the service.
+
+### 5 - 7) Wallet Operations
+
+* **Create / Import Wallet:** Generates or recovers a seed phrase stored in `$HOME/.worrell`. Automatically sets `WORRELL_WALLET_ADDRESS` in your shell environment.
+* **List Wallets:** Displays all keys registered under the isolated home directory.
+
+### 8) Check Balance
+
+Bypasses OS Keyring prompts by querying the bank module directly with your `worrell1...` address:
+
+```bash
+worrelld query bank balances <WORRELL_ADDRESS> --home $HOME/.worrell --node tcp://127.0.0.1:<PORT>657
+
+```
+
+### 9) Request Faucet Tokens
+
+Sends an automated API request to `[http://164.68.98.186:4500](http://164.68.98.186:4500)` for 500 WORRELL test tokens (rate limit: once per hour per address).
+
+### 10) Create Validator
+
+Generates the Cosmos SDK v0.50+ compliant `$HOME/.worrell/validator.json` specification and submits the transaction using your `worrell1...` signer address:
+
+```json
 {
-  "pubkey": $(worrelld tendermint show-validator --home $HOME/.worrell),
-  "amount": "${AMOUNT}",
-  "moniker": "${MONIKER}",
-  "identity": "${IDENTITY}",
-  "website": "${WEBSITE}",
-  "security": "${SECURITY_CONTACT}",
-  "details": "${DETAILS}",
+  "pubkey": {"@type":"/cosmos.crypto.ed25519.PubKey","key":"..."},
+  "amount": "490000000uworrell",
+  "moniker": "YOUR_MONIKER",
+  "identity": "YOUR_KEYBASE_ID",
+  "website": "https://yourwebsite.com",
+  "security": "security@yourwebsite.com",
+  "details": "Validator description",
   "commission-rate": "0.05",
   "commission-max-rate": "0.20",
   "commission-max-change-rate": "0.01",
   "min-self-delegation": "1000000"
 }
-EOF
-```
-```
-# Cüzdan adınızı ve port bilginizi tanımlayın
-WALLET="wallet-adı"
-PORT_PREFIX=$(grep 'WORRELL_PORT=' $HOME/.bash_profile 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" || echo "10")
 
+```
+
+```bash
 worrelld tx staking create-validator $HOME/.worrell/validator.json \
-  --from $WALLET \
+  --from <SIGNER_ADDRESS> \
   --chain-id worrell-testnet-1 \
   --home $HOME/.worrell \
-  --node tcp://127.0.0.1:${PORT_PREFIX}657 \
+  --node tcp://127.0.0.1:<PORT>657 \
   --gas auto \
   --gas-adjustment 1.5 \
   --gas-prices 0.025uworrell \
@@ -171,47 +154,43 @@ worrelld tx staking create-validator $HOME/.worrell/validator.json \
 
 ```
 
-### 11) Node Yönetimi
+### 11) Node Service Management
 
-Alt menüden node durumunu görüntüleyebilir, yeniden başlatabilir,
-durdurabilir, başlatabilir veya **tamamen silebilirsiniz** (silme işlemi
-onay ister; sunucudaki paylaşılan Go/Cosmovisor kurulumuna dokunmaz,
-sadece bu node'a ait dosyaları kaldırır).
+Submenu to restart, stop, start, view systemd status, or cleanly wipe the Worrell installation without affecting your system Go environment or other node daemons.
 
 ---
 
-## Firewall
+## Firewall Configuration (UFW)
 
-En azından P2P portunu dışa açmanız gerekir (seçtiğiniz prefix'e göre
-`<prefix>656`):
+Ensure P2P traffic is accessible based on your chosen port prefix (e.g., prefix `10`):
 
 ```bash
-sudo ufw allow 10656/tcp   # p2p (örnek: prefix=10)
-sudo ufw allow 10657/tcp   # rpc (opsiyonel, dışa açmak isterseniz)
-sudo ufw allow 10317/tcp   # REST API (opsiyonel)
+sudo ufw allow 10656/tcp comment "Worrell P2P"
+sudo ufw allow 10657/tcp comment "Worrell RPC (Optional)"
+sudo ufw allow 10317/tcp comment "Worrell API (Optional)"
+
 ```
 
 ---
 
-## Cosmovisor ile ileride yapılacak upgrade'ler
+## Cosmovisor Upgrades
 
-Bir governance upgrade proposal'ı geçerse yeni binary'yi şu klasöre
-koymanız yeterlidir:
+When a network upgrade proposal passes governance, prepare the target binary under the Cosmovisor upgrades folder:
 
 ```bash
-mkdir -p $HOME/.worrell/cosmovisor/upgrades/<UPGRADE-ADI>/bin
-cp <yeni-worrelld-binary> $HOME/.worrell/cosmovisor/upgrades/<UPGRADE-ADI>/bin/worrelld
-chmod +x $HOME/.worrell/cosmovisor/upgrades/<UPGRADE-ADI>/bin/worrelld
+mkdir -p $HOME/.worrell/cosmovisor/upgrades/<UPGRADE_NAME>/bin
+cp <new_worrelld_binary> $HOME/.worrell/cosmovisor/upgrades/<UPGRADE_NAME>/bin/worrelld
+chmod +x $HOME/.worrell/cosmovisor/upgrades/<UPGRADE_NAME>/bin/worrelld
+
 ```
 
-Upgrade bloğuna ulaşıldığında Cosmovisor node'u otomatik olarak durdurup
-yeni binary ile yeniden başlatır. Yükseltme duyuruları için:
-[t.me/worrellvalidators](https://t.me/worrellvalidators).
+Cosmovisor will switch to the new binary automatically at the target upgrade block height.
 
 ---
 
-## Yardım
+## Community & Resources
 
-- GitHub Discussions: [worrellchain/worrell](https://github.com/worrellchain/worrell/discussions)
-- E-posta: hello@worrellchain.com
-- Telegram: [t.me/worrellvalidators](https://t.me/worrellvalidators)
+* **Documentation:** [docs.oshvank.xyz/docs/testnet/Worrel](https://docs.oshvank.xyz/docs/testnet/Worrel)
+* **Explorer:** [explorer.oshvank.xyz/worrel-testnet](https://explorer.oshvank.xyz/worrel-testnet)
+* **Public RPC:** `worrel-testnet-rpc.oshvank.xyz`
+* **Official Telegram:** [t.me/worrellvalidators](https://t.me/worrellvalidators)
