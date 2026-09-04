@@ -51,18 +51,40 @@ get_node_rpc() {
 # NOT: Tüm bilgilendirme/menü metinleri stderr'e yazılır, stdout SADECE
 # seçilen cüzdan ismini döner ($(select_wallet) ile yakalanabilsin diye).
 select_wallet() {
+    if ! command -v jq >/dev/null 2>&1; then
+        echo -e "${RED}'jq' komutu bulunamadı! Cüzdanlar tespit edilemiyor.${NC}" >&2
+        echo -e "${YELLOW}Kurmak için: sudo apt-get install jq -y${NC}" >&2
+        return 1
+    fi
+
+    local err_file
+    err_file=$(mktemp)
     local keys_json
-    keys_json=$($HOME/go/bin/worrelld keys list --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" --output json 2>/dev/null)
+    keys_json=$($HOME/go/bin/worrelld keys list --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME" --output json 2>"$err_file")
+    local rc=$?
+    local keys_err
+    keys_err=$(cat "$err_file")
+    rm -f "$err_file"
+
+    if [ $rc -ne 0 ]; then
+        echo -e "${RED}'worrelld keys list' komutu hata verdi (exit code: $rc):${NC}" >&2
+        echo -e "${YELLOW}${keys_err}${NC}" >&2
+        echo -e "${YELLOW}Kontrol edin: $HOME/go/bin/worrelld dosyası var mı? ${WORRELL_HOME} doğru mu?${NC}" >&2
+        return 1
+    fi
 
     local count
     count=$(echo "$keys_json" | jq 'length' 2>/dev/null)
 
     if [ -z "$count" ] || [ "$count" = "0" ] || [ "$count" = "null" ]; then
-        echo -e "${RED}'${KEYRING_BACKEND}' keyring'inde kayıtlı cüzdan bulunamadı!${NC}" >&2
-        echo -e "${YELLOW}Önce 'Cüzdan Oluştur' veya 'Cüzdan İçe Aktar' seçeneğini kullanın.${NC}" >&2
-        echo -e "${YELLOW}(Not: Başka bir yöntemle -- ör. varsayılan 'os' backend ile -- oluşturulmuş${NC}" >&2
-        echo -e "${YELLOW}bir cüzdanınız varsa, bu 'test' keyring'inde görünmez; 'Cüzdan İçe Aktar'${NC}" >&2
-        echo -e "${YELLOW}ile aynı mnemonic'i buraya tekrar eklemeniz gerekir.)${NC}" >&2
+        echo -e "${RED}'${KEYRING_BACKEND}' keyring'inde kayıtlı cüzdan bulunamadı.${NC}" >&2
+        echo -e "${YELLOW}Aranan konum: ${WORRELL_HOME}/keyring-${KEYRING_BACKEND}${NC}" >&2
+        if [ -n "$keys_err" ]; then
+            echo -e "${YELLOW}worrelld çıktısı: ${keys_err}${NC}" >&2
+        fi
+        echo -e "${YELLOW}Ham komut çıktısı: ${keys_json}${NC}" >&2
+        echo -e "${YELLOW}Önce 'Cüzdan Oluştur' veya 'Cüzdan İçe Aktar' seçeneğini kullanın,${NC}" >&2
+        echo -e "${YELLOW}ya da 'Cüzdanları Listele' ile mevcut durumu kontrol edin.${NC}" >&2
         return 1
     fi
 
@@ -87,6 +109,33 @@ select_wallet() {
     echo "${names[$((sel-1))]}"
     return 0
 }
+
+# Kayıtlı tüm cüzdanları (isim + adres) listeler — teşhis / bilgi amaçlı
+list_wallets() {
+    clear
+    print_logo
+    echo -e "${CYAN}Keyring backend: ${WHITE}${KEYRING_BACKEND}${NC}"
+    echo -e "${CYAN}Home dizini    : ${WHITE}${WORRELL_HOME}${NC}"
+    echo -e "${CYAN}Keyring yolu   : ${WHITE}${WORRELL_HOME}/keyring-${KEYRING_BACKEND}${NC}"
+    echo
+
+    if [ ! -f "$HOME/go/bin/worrelld" ]; then
+        echo -e "${RED}HATA: $HOME/go/bin/worrelld bulunamadı! Önce node kurulumu yapılmalı.${NC}"
+        read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+        return
+    fi
+
+    echo -e "${BLUE}worrelld keys list çıktısı:${NC}"
+    echo
+    $HOME/go/bin/worrelld keys list --keyring-backend "$KEYRING_BACKEND" --home "$WORRELL_HOME"
+    local rc=$?
+    echo
+    if [ $rc -ne 0 ]; then
+        echo -e "${RED}Komut hata verdi (exit code: $rc) — yukarıdaki mesaja bakın.${NC}"
+    fi
+    read -p "$(echo -e ${CYAN}$(get_text press_enter)${NC})"
+}
+
 
 # ASCII Art
 print_logo() {
@@ -143,6 +192,9 @@ get_text() {
             ;;
         "import_wallet")
             [ "$LANG_SEL" = "TR" ] && echo "Cüzdan İçe Aktar" || echo "Import Wallet"
+            ;;
+        "list_wallets")
+            [ "$LANG_SEL" = "TR" ] && echo "Cüzdanları Listele" || echo "List Wallets"
             ;;
         "create_validator")
             [ "$LANG_SEL" = "TR" ] && echo "Validator Oluştur" || echo "Create Validator"
@@ -999,13 +1051,14 @@ main_menu() {
         echo -e "${WHITE}3)${NC}  $(get_text view_logs)"
         echo -e "${WHITE}4)${NC}  $(get_text create_wallet)"
         echo -e "${WHITE}5)${NC}  $(get_text import_wallet)"
-        echo -e "${WHITE}6)${NC}  $(get_text create_validator)"
-        echo -e "${WHITE}7)${NC}  $(get_text delegate)"
-        echo -e "${WHITE}8)${NC}  $(get_text send_tokens)"
-        echo -e "${WHITE}9)${NC}  $(get_text check_balance)"
-        echo -e "${WHITE}10)${NC} $(get_text request_faucet)"
-        echo -e "${WHITE}11)${NC} $(get_text state_sync)"
-        echo -e "${WHITE}12)${NC} $(get_text node_management)"
+        echo -e "${WHITE}6)${NC}  $(get_text list_wallets)"
+        echo -e "${WHITE}7)${NC}  $(get_text create_validator)"
+        echo -e "${WHITE}8)${NC}  $(get_text delegate)"
+        echo -e "${WHITE}9)${NC}  $(get_text send_tokens)"
+        echo -e "${WHITE}10)${NC} $(get_text check_balance)"
+        echo -e "${WHITE}11)${NC} $(get_text request_faucet)"
+        echo -e "${WHITE}12)${NC} $(get_text state_sync)"
+        echo -e "${WHITE}13)${NC} $(get_text node_management)"
         echo -e "${WHITE}0)${NC}  $(get_text exit)"
         echo
         read -p "$(echo -e ${YELLOW}"Seçiminiz / Your choice: "${NC})" choice
@@ -1016,13 +1069,14 @@ main_menu() {
             3) view_logs ;;
             4) create_wallet ;;
             5) import_wallet ;;
-            6) create_validator ;;
-            7) delegate_tokens ;;
-            8) send_tokens ;;
-            9) check_balance ;;
-            10) request_faucet ;;
-            11) state_sync_menu ;;
-            12) node_management_menu ;;
+            6) list_wallets ;;
+            7) create_validator ;;
+            8) delegate_tokens ;;
+            9) send_tokens ;;
+            10) check_balance ;;
+            11) request_faucet ;;
+            12) state_sync_menu ;;
+            13) node_management_menu ;;
             0)
                 echo -e "${GREEN}Çıkılıyor... / Exiting...${NC}"
                 exit 0
